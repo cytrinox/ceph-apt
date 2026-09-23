@@ -1,0 +1,330 @@
+#!/usr/bin/env bash
+#
+# ceph-deb - build upstream Ceph releases as .deb packages and maintain an
+# apt repository with one sub-repository per Ceph release.
+#
+# Runs inside the ceph-apt builder container. Expected mounts:
+#   /repo     apt repository root (read-write)
+#   /work     tarball cache and build trees (read-write, ~60 GB free)
+#   /ccache   ccache directory (optional)
+#
+# Signing is not done here: `index` writes an unsigned Release file and
+# `./ceph-apt sign` signs it on the host with the user's own gpg.
+#
+set -euo pipefail
+
+LIBDIR=/usr/local/lib/ceph-deb
+PATCH_DIR=${PATCH_DIR:-/usr/local/share/ceph-deb/patches}
+REPO=${REPO:-/repo}
+WORK=${WORK:-/work}
+ARCHES=${ARCHES:-amd64 arm64}
+REPO_ORIGIN=${REPO_ORIGIN:-ceph-apt}
+REPO_LABEL=${REPO_LABEL:-Ceph}
+CEPH_DOWNLOAD_URL=${CEPH_DOWNLOAD_URL:-https://download.ceph.com/tarballs}
+
+# shellcheck source-path=SCRIPTDIR source=lib/releases.sh
+. "$LIBDIR/releases.sh"
+
+log()  { printf '==> %s\n' "$*" >&2; }
+warn() { printf 'WARNING: %s\n' "$*" >&2; }
+die()  { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+
+usage() {
+    cat <<'EOF'
+Usage: ceph-deb <command> [options]
+
+Commands:
+  build <version> [options]   Download, build and add Ceph <version> to /repo
+      --release NAME          Ceph release name (default: derived from version)
+      --rev N                 Rebuild number, the uN in <version>-1~deb12uN
+                              (default 1); bump it to rebuild a version that
+                              is already in the pool
+      --jobs N                Parallel compile jobs (default: min(nproc, RAM/3GB))
+      --with-dbg              Also build and publish the (huge) -dbg packages
+      --force                 Overwrite packages already in the pool
+      --keep                  Keep the build tree in /work/build
+      --prepare-only          Stop after installing the build dependencies
+  index [release...]          Regenerate the (unsigned) apt metadata
+  shell                       Start an interactive shell
+  help                        Show this help
+
+The Debian version is <version>-1~<distrotag>u<rev>, e.g. 19.2.3-1~deb12u1.
+EOF
+}
+
+# ---------------------------------------------------------------------------
+# build
+# ---------------------------------------------------------------------------
+
+# Parallel jobs: Ceph needs roughly 3 GB of RAM per compile job.
+default_jobs() {
+    local mem_kb limit jobs cpus
+    mem_kb=$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)
+    limit=$(cat /sys/fs/cgroup/memory.max 2>/dev/null || echo max)
+    if [[ "$limit" =~ ^[0-9]+$ ]] && (( limit / 1024 < mem_kb )); then
+        mem_kb=$(( limit / 1024 ))
+    fi
+    jobs=$(( mem_kb / (3 * 1024 * 1024) ))
+    cpus=$(nproc)
+    (( jobs > cpus )) && jobs=$cpus
+    (( jobs < 1 )) && jobs=1
+    echo "$jobs"
+}
+
+fetch_tarball() {
+    local version=$1 url tarball sum
+    url="$CEPH_DOWNLOAD_URL/ceph-$version.tar.gz"
+    tarball="$WORK/tarballs/ceph-$version.tar.gz"
+    mkdir -p "$WORK/tarballs"
+    if [ ! -s "$tarball" ]; then
+        log "Downloading $url"
+        curl -fL --retry 3 -o "$tarball.part" "$url"
+        mv "$tarball.part" "$tarball"
+    fi
+    # Older releases publish a .sha256 next to the tarball; use it if present.
+    if sum=$(curl -fsL "$url.sha256" 2>/dev/null); then
+        log "Verifying SHA256"
+        echo "${sum%% *}  $tarball" | sha256sum -c - >&2 \
+            || die "checksum mismatch, remove $tarball and retry"
+    fi
+    echo "$tarball"
+}
+
+# Drop the -dbg packages like upstream make-debs.sh does; they are several GB
+# and take a long time to build.
+strip_dbg_packages() {
+    local srcdir=$1
+    perl -ni -e 'print if(!(/^Package: .*-dbg$/../^$/))' "$srcdir/debian/control"
+    perl -pi -e 's/--dbg-package.*//' "$srcdir/debian/rules"
+}
+
+apply_patches() {
+    local srcdir=$1 release=$2 codename=$3 dir p
+    for dir in "$PATCH_DIR/$release" "$PATCH_DIR/$release/$codename"; do
+        for p in "$dir"/*.patch; do
+            [ -e "$p" ] || continue
+            log "Applying ${p#"$PATCH_DIR"/}"
+            patch -d "$srcdir" -p1 --forward --batch < "$p"
+        done
+    done
+}
+
+install_build_deps() {
+    local builddir=$1 srcdir=$2
+    log "Installing build dependencies"
+    apt-get update
+    mkdir -p "$builddir/deps"
+    (cd "$builddir/deps" && mk-build-deps --install --remove \
+        --tool 'apt-get -y --no-install-recommends' "$srcdir/debian/control")
+}
+
+# Owner of new files: whoever owns the repository root. Matters for rootful
+# docker; with rootless podman this is a no-op.
+fix_ownership() {
+    local owner
+    [ "$(id -u)" = 0 ] || return 0
+    owner=$(stat -c %u:%g "$REPO")
+    [ "$owner" = 0:0 ] || chown -R "$owner" "$@"
+}
+
+cmd_build() {
+    local version="" release="" rev=1 jobs="" with_dbg=0 force=0 keep=0 prepare_only=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --release) release=$2; shift ;;
+            --rev) rev=$2; shift ;;
+            --jobs) jobs=$2; shift ;;
+            --with-dbg) with_dbg=1 ;;
+            --force) force=1 ;;
+            --keep) keep=1 ;;
+            --prepare-only) prepare_only=1 ;;
+            -*) die "unknown option $1" ;;
+            *) [ -z "$version" ] || die "unexpected argument $1"; version=$1 ;;
+        esac
+        shift
+    done
+    [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "usage: ceph-deb build <x.y.z> [options]"
+    [[ "$rev" =~ ^[0-9]+$ ]] || die "--rev must be a number"
+    if [ -z "$release" ]; then
+        release=$(ceph_release_name "$version") || die "unknown Ceph major version, pass --release"
+    fi
+    [ -d "$REPO" ] || die "$REPO is not mounted"
+    [ -d "$WORK" ] || die "$WORK is not mounted"
+
+    local codename tag arch debver pooldir builddir srcdir mode
+    codename=$(distro_codename)
+    tag=$(distro_tag)
+    arch=$(dpkg --print-architecture)
+    debver="$version-1~${tag}u${rev}"
+    pooldir="$REPO/$release/pool/$codename/main/c/ceph"
+    builddir="$WORK/build/ceph-$version-$tag-$arch"
+    srcdir="$builddir/ceph-$version"
+
+    # arch:all packages are built on amd64 only, so each *_all.deb exists once.
+    if [ "${BUILD_ARCH_INDEP:-$([ "$arch" = amd64 ] && echo yes || echo no)}" = yes ]; then
+        mode=-b
+    else
+        mode=-B
+    fi
+
+    log "Ceph $version ($release) for $codename/$arch as $debver, dpkg-buildpackage $mode"
+
+    if compgen -G "$pooldir/*_${debver}_${arch}.deb" > /dev/null && [ "$force" != 1 ]; then
+        die "$debver for $arch is already in $pooldir (use --rev N+1 to rebuild, or --force)"
+    fi
+
+    local tarball
+    tarball=$(fetch_tarball "$version")
+
+    log "Extracting into $builddir"
+    rm -rf "$builddir"
+    mkdir -p "$builddir"
+    tar -xzf "$tarball" -C "$builddir" --no-same-owner
+    [ -d "$srcdir/debian" ] || die "no debian/ directory in $tarball"
+    # On failure the build tree is left in place for inspection.
+
+    [ "$with_dbg" = 1 ] || strip_dbg_packages "$srcdir"
+    apply_patches "$srcdir" "$release" "$codename"
+
+    (cd "$srcdir" && \
+        DEBFULLNAME="${DEBFULLNAME:-ceph-apt}" DEBEMAIL="${DEBEMAIL:-ceph-apt@localhost}" \
+        dch --force-bad-version --no-auto-nmu --newversion "$debver" \
+            --distribution "$codename" --force-distribution \
+            "Rebuild of upstream Ceph $version for $codename.")
+
+    install_build_deps "$builddir" "$srcdir"
+
+    if [ "$prepare_only" = 1 ]; then
+        log "Prepared $srcdir (--prepare-only), not building"
+        return 0
+    fi
+
+    jobs=${jobs:-$(default_jobs)}
+    local opts="nocheck parallel=$jobs"
+    [ "$with_dbg" = 1 ] || opts="$opts noautodbgsym"
+    export DEB_BUILD_OPTIONS="$opts${DEB_BUILD_OPTIONS:+ $DEB_BUILD_OPTIONS}"
+    if [ -d /ccache ] && [ -w /ccache ]; then
+        export CCACHE_DIR=/ccache CCACHE_BASEDIR="$WORK/build" CCACHE_NOHASHDIR=true
+        export CCACHE_MAXSIZE=${CCACHE_MAXSIZE:-30G}
+        export CEPH_EXTRA_CMAKE_ARGS="-DWITH_CCACHE=ON${CEPH_EXTRA_CMAKE_ARGS:+ $CEPH_EXTRA_CMAKE_ARGS}"
+        ccache -z > /dev/null
+    fi
+
+    log "Building with DEB_BUILD_OPTIONS='$DEB_BUILD_OPTIONS' (log: $builddir/build.log)"
+    (cd "$srcdir" && dpkg-buildpackage "$mode" -us -uc) 2>&1 | tee "$builddir/build.log"
+    [ -n "${CCACHE_DIR:-}" ] && ccache -s
+
+    log "Adding packages to $pooldir"
+    mkdir -p "$pooldir"
+    local f name count=0
+    for f in "$builddir"/*.deb "$builddir"/*.ddeb; do
+        [ -e "$f" ] || continue
+        name=$(basename "$f")
+        if [ "$with_dbg" != 1 ]; then
+            case "$name" in *-dbg_*|*-dbgsym_*|*.ddeb) continue ;; esac
+        fi
+        if [ -e "$pooldir/$name" ] && [ "$force" != 1 ]; then
+            warn "keeping existing $name"
+            continue
+        fi
+        install -m 0644 "$f" "$pooldir/$name"
+        count=$((count + 1))
+    done
+    [ "$count" -gt 0 ] || die "no packages were produced"
+
+    local logdir="$REPO/$release/buildlogs/$codename"
+    mkdir -p "$logdir"
+    for f in "$builddir"/*.buildinfo "$builddir"/*.changes; do
+        [ -e "$f" ] && install -m 0644 "$f" "$logdir/"
+    done
+    xz -T0 -c "$builddir/build.log" > "$logdir/ceph_${debver}_${arch}.build.xz"
+
+    fix_ownership "$REPO/$release"
+    [ "$keep" = 1 ] || rm -rf "$builddir"
+    log "Added $count packages. Run 'index' to publish them."
+}
+
+# ---------------------------------------------------------------------------
+# index
+# ---------------------------------------------------------------------------
+
+# index_suite <release> <codename>
+index_suite() {
+    local release=$1 codename=$2 reldir="$REPO/$1"
+    local new="$reldir/dists/.$codename.new" old="$reldir/dists/.$codename.old"
+    local db="$WORK/ftparchive/$release.db" dbopt=() arch dir
+
+    if [ -d "$WORK" ] && [ -w "$WORK" ]; then
+        mkdir -p "$WORK/ftparchive"
+        dbopt=(--db "$db")
+    fi
+
+    log "Indexing $release/$codename"
+    rm -rf "$new" "$old"
+    for arch in $ARCHES; do
+        dir="$new/main/binary-$arch"
+        mkdir -p "$dir"
+        # Scans every version in the pool, so all point releases stay available.
+        (cd "$reldir" && apt-ftparchive "${dbopt[@]}" -a "$arch" packages "pool/$codename") > "$dir/Packages"
+        gzip -9nk "$dir/Packages"
+        xz -k "$dir/Packages"
+    done
+
+    apt-ftparchive \
+        -o APT::FTPArchive::Release::Origin="$REPO_ORIGIN" \
+        -o APT::FTPArchive::Release::Label="$REPO_LABEL" \
+        -o APT::FTPArchive::Release::Suite="$codename" \
+        -o APT::FTPArchive::Release::Codename="$codename" \
+        -o APT::FTPArchive::Release::Architectures="$ARCHES" \
+        -o APT::FTPArchive::Release::Components=main \
+        -o APT::FTPArchive::Release::Description="Ceph $release packages for $codename" \
+        release "$new" > "$new.Release"
+    mv "$new.Release" "$new/Release"
+
+    # Swap the finished tree into place. This drops the old InRelease and
+    # Release.gpg on purpose: an unsigned tree makes apt fail loudly, while a
+    # stale signature would only show up as hash mismatches on clients.
+    [ ! -d "$reldir/dists/$codename" ] || mv "$reldir/dists/$codename" "$old"
+    mv "$new" "$reldir/dists/$codename"
+    rm -rf "$old"
+}
+
+cmd_index() {
+    local releases=() release codename pool
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -*) die "unknown option $1" ;;
+            *) releases+=("$1") ;;
+        esac
+        shift
+    done
+    if [ ${#releases[@]} -eq 0 ]; then
+        for pool in "$REPO"/*/pool; do
+            [ -d "$pool" ] && releases+=("$(basename "$(dirname "$pool")")")
+        done
+    fi
+    [ ${#releases[@]} -gt 0 ] || die "nothing to index in $REPO"
+
+    for release in "${releases[@]}"; do
+        [ -d "$REPO/$release/pool" ] || die "$REPO/$release/pool does not exist"
+        for pool in "$REPO/$release"/pool/*/; do
+            [ -d "$pool" ] || continue
+            codename=$(basename "$pool")
+            index_suite "$release" "$codename"
+        done
+        fix_ownership "$REPO/$release"
+    done
+    log "Done. The metadata is unsigned: run ./ceph-apt sign before uploading."
+}
+
+# ---------------------------------------------------------------------------
+
+cmd=${1:-help}
+[ $# -eq 0 ] || shift
+case "$cmd" in
+    build) cmd_build "$@" ;;
+    index) cmd_index "$@" ;;
+    shell) exec bash "$@" ;;
+    help|-h|--help) usage ;;
+    *) usage >&2; exit 1 ;;
+esac

@@ -1,0 +1,42 @@
+# Copy to ceph-apt.conf and adjust. Sourced by ./ceph-apt (bash syntax).
+
+# The apt repository: one sub-directory per Ceph release (squid/, tentacle/...).
+# This is the directory you rsync to your hosting.
+REPO_DIR=/srv/ceph-apt/repo
+
+# Tarball cache and build trees. Needs ~60 GB free per concurrent build.
+WORK_DIR=/srv/ceph-apt/work
+
+# ccache, one sub-directory per distribution/arch. Speeds up point releases.
+CACHE_DIR=/srv/ceph-apt/ccache
+#CCACHE_MAXSIZE=30G
+
+# Changelog entry of the rebuilt packages.
+DEBFULLNAME="Your Name"
+DEBEMAIL="you@example.org"
+
+# Default key for `./ceph-apt sign`, which signs on this host with your own
+# gpg (agent, pinentry, smartcards). `--key=<ID>` overrides it for one run.
+SIGNING_KEY=<fingerprint>
+# Keyring to use instead of ~/.gnupg (optional).
+#GNUPGHOME=/srv/ceph-apt/gnupg
+
+# Release file fields. REPO_ORIGIN is what clients pin on.
+#REPO_ORIGIN=ceph-apt
+#REPO_LABEL=Ceph
+#ARCHES="amd64 arm64"
+
+# Image used for `index` (any built image works, the host arch does not matter).
+#INDEX_DIST=bookworm
+
+# Container engine: podman (preferred) or docker. Auto-detected if unset.
+#ENGINE=podman
+#IMAGE=localhost/ceph-apt-builder
+# Extra volume options, e.g. "z" on SELinux hosts.
+#VOLUME_OPTS=
+
+# Build tuning (forwarded into the build container).
+#DEB_BUILD_PROFILES=
+#CEPH_EXTRA_CMAKE_ARGS=
+# Build arch:all packages here too (default: only on amd64).
+#BUILD_ARCH_INDEP=no

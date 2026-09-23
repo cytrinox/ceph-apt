@@ -1,0 +1,5 @@
+/ceph-apt.conf
+/repo/
+/work/
+/ccache/
+*.asc

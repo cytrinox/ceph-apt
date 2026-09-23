@@ -1,0 +1,195 @@
+#!/usr/bin/env bash
+#
+# ceph-apt - host-side wrapper around the ceph-apt builder container.
+#
+#   ./ceph-apt image bookworm trixie          build the builder images
+#   ./ceph-apt build 19.2.3 bookworm [opts]   build Ceph into the repo pool
+#   ./ceph-apt index [release...]             regenerate apt metadata (unsigned)
+#   ./ceph-apt sign [--key=ID] [release...]   sign it locally with your gpg
+#   ./ceph-apt shell bookworm                 debug shell in the builder
+#
+# Build options:
+#   --rev N           rebuild number, the uN in 19.2.3-1~deb12uN (default 1).
+#                     Bump it to rebuild a version that is already in the pool.
+#   --index           run index (and sign, if SIGNING_KEY is set) afterwards
+#   --jobs N          parallel compile jobs (default: min(nproc, RAM/3GB))
+#   --with-dbg        also build and publish the -dbg packages (several GB)
+#   --release NAME    Ceph release name if the version is not known yet
+#   --keep            keep the build tree in WORK_DIR/build
+#   --prepare-only    stop after installing the build dependencies
+#   --force           overwrite packages already in the pool
+#
+# Settings come from ./ceph-apt.conf (see ceph-apt.conf.example).
+#
+set -euo pipefail
+
+HERE=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
+CONF=${CEPH_APT_CONF:-$HERE/ceph-apt.conf}
+# shellcheck disable=SC1090
+[ ! -f "$CONF" ] || . "$CONF"
+# Let a GNUPGHOME from the config reach gpg.
+[ -z "${GNUPGHOME:-}" ] || export GNUPGHOME
+
+REPO_DIR=${REPO_DIR:-$HERE/repo}
+WORK_DIR=${WORK_DIR:-$HERE/work}
+CACHE_DIR=${CACHE_DIR:-$HERE/ccache}
+IMAGE=${IMAGE:-localhost/ceph-apt-builder}
+INDEX_DIST=${INDEX_DIST:-bookworm}
+ENGINE=${ENGINE:-$(command -v podman || command -v docker || true)}
+VOLUME_OPTS=${VOLUME_OPTS:-}
+
+# Settings forwarded into the container when set.
+PASS_ENV=(DEBFULLNAME DEBEMAIL ARCHES REPO_ORIGIN REPO_LABEL
+          CCACHE_MAXSIZE CEPH_DOWNLOAD_URL CEPH_EXTRA_CMAKE_ARGS
+          DEB_BUILD_PROFILES BUILD_ARCH_INDEP)
+
+die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+
+usage() {
+    # Print the header comment.
+    awk 'NR < 3 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"
+    exit "${1:-0}"
+}
+
+base_image() {
+    case "$1" in
+        bullseye|bookworm|trixie|forky|sid) echo "debian:$1" ;;
+        jammy|noble|resolute) echo "ubuntu:$1" ;;
+        *) die "unknown distribution '$1' (known: bookworm trixie forky jammy noble resolute)" ;;
+    esac
+}
+
+host_arch() {
+    case "$(uname -m)" in
+        x86_64) echo amd64 ;;
+        aarch64|arm64) echo arm64 ;;
+        *) uname -m ;;
+    esac
+}
+
+# vol <host> <container> [ro]
+vol() {
+    local opts=${3:-}
+    [ -z "$VOLUME_OPTS" ] || opts="${opts:+$opts,}$VOLUME_OPTS"
+    printf '%s:%s%s' "$1" "$2" "${opts:+:$opts}"
+}
+
+# run <dist> [engine run args...] -- <ceph-deb args...>
+run() {
+    local dist=$1 args=() v
+    shift
+    base_image "$dist" > /dev/null
+    [ -n "$ENGINE" ] || die "neither podman nor docker found"
+    mkdir -p "$REPO_DIR" "$WORK_DIR"
+    while [ $# -gt 0 ] && [ "$1" != -- ]; do args+=("$1"); shift; done
+    [ $# -eq 0 ] || shift
+    [ -t 0 ] && [ -t 1 ] && args+=(-it)
+    for v in "${PASS_ENV[@]}"; do
+        [ -z "${!v:-}" ] || args+=(-e "$v=${!v}")
+    done
+    # Scripts and patches come from this checkout, so editing them needs no
+    # image rebuild; the image only provides the toolchain.
+    "$ENGINE" run --rm --init \
+        -v "$(vol "$REPO_DIR" /repo)" \
+        -v "$(vol "$WORK_DIR" /work)" \
+        -v "$(vol "$HERE/scripts/ceph-deb" /usr/local/bin/ceph-deb ro)" \
+        -v "$(vol "$HERE/scripts/lib" /usr/local/lib/ceph-deb ro)" \
+        -v "$(vol "$HERE/patches" /usr/local/share/ceph-deb/patches ro)" \
+        "${args[@]}" "$IMAGE:$dist" "$@"
+}
+
+cmd_image() {
+    [ $# -gt 0 ] || die "usage: ceph-apt image <dist>..."
+    [ -n "$ENGINE" ] || die "neither podman nor docker found"
+    local dist
+    for dist in "$@"; do
+        "$ENGINE" build --pull \
+            --build-arg "BASE=$(base_image "$dist")" \
+            -t "$IMAGE:$dist" -f "$HERE/Containerfile" "$HERE"
+    done
+}
+
+cmd_build() {
+    [ $# -ge 2 ] || die "usage: ceph-apt build <version> <dist> [--index] [ceph-deb build options]"
+    local version=$1 dist=$2 opts=() do_index=0 cache o
+    shift 2
+    base_image "$dist" > /dev/null
+    for o in "$@"; do
+        if [ "$o" = --index ]; then do_index=1; else opts+=("$o"); fi
+    done
+    cache="$CACHE_DIR/$dist-$(host_arch)"
+    mkdir -p "$cache"
+    run "$dist" -v "$(vol "$cache" /ccache)" -- build "$version" "${opts[@]}"
+    [ "$do_index" = 1 ] || return 0
+    cmd_index
+    if [ -n "${SIGNING_KEY:-}" ]; then
+        cmd_sign
+    else
+        echo "==> SIGNING_KEY is not set, run ./ceph-apt sign --key=<ID> before uploading" >&2
+    fi
+}
+
+cmd_index() {
+    run "$INDEX_DIST" -- index "$@"
+}
+
+# Signs on the host with the user's own gpg (agent, pinentry, smartcards);
+# the key never enters a container.
+cmd_sign() {
+    local key=${SIGNING_KEY:-} releases=() release d rel suite n=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --key=*) key=${1#--key=} ;;
+            --key) [ $# -ge 2 ] || die "--key needs a key ID"; key=$2; shift ;;
+            -*) die "unknown option $1" ;;
+            *) releases+=("$1") ;;
+        esac
+        shift
+    done
+    [ -n "$key" ] || die "no signing key: set SIGNING_KEY in $CONF or pass --key=<ID>"
+    command -v gpg > /dev/null || die "gpg not found"
+    gpg --batch --list-secret-keys "$key" > /dev/null 2>&1 \
+        || die "no secret key '$key' in your keyring${GNUPGHOME:+ ($GNUPGHOME)}"
+
+    if [ ${#releases[@]} -eq 0 ]; then
+        for d in "$REPO_DIR"/*/dists; do
+            [ -d "$d" ] && releases+=("$(basename "$(dirname "$d")")")
+        done
+    fi
+    [ ${#releases[@]} -gt 0 ] || die "nothing to sign in $REPO_DIR, run ./ceph-apt index first"
+
+    local gpg=(gpg --yes --local-user "$key" --digest-algo SHA512)
+    # Without a terminal there is no pinentry; rely on the agent's cache.
+    [ -t 0 ] || gpg+=(--batch)
+
+    for release in "${releases[@]}"; do
+        [ -d "$REPO_DIR/$release/dists" ] || die "$REPO_DIR/$release/dists does not exist"
+        for rel in "$REPO_DIR/$release"/dists/*/Release; do
+            [ -e "$rel" ] || continue
+            suite=$(dirname "$rel")
+            echo "==> Signing $release/$(basename "$suite")" >&2
+            "${gpg[@]}" --clearsign --output "$suite/InRelease.tmp" "$rel"
+            "${gpg[@]}" --armor --detach-sign --output "$suite/Release.gpg.tmp" "$rel"
+            mv "$suite/InRelease.tmp" "$suite/InRelease"
+            mv "$suite/Release.gpg.tmp" "$suite/Release.gpg"
+            n=$((n + 1))
+        done
+    done
+    [ "$n" -gt 0 ] || die "no Release files found, run ./ceph-apt index first"
+
+    gpg --batch --armor --export "$key" > "$REPO_DIR/ceph-apt.asc.tmp"
+    mv "$REPO_DIR/ceph-apt.asc.tmp" "$REPO_DIR/ceph-apt.asc"
+    echo "==> Signed $n suite(s) with $key, public key: $REPO_DIR/ceph-apt.asc" >&2
+}
+
+cmd=${1:-help}
+[ $# -eq 0 ] || shift
+case "$cmd" in
+    image) cmd_image "$@" ;;
+    build) cmd_build "$@" ;;
+    index) cmd_index "$@" ;;
+    sign) cmd_sign "$@" ;;
+    shell) [ $# -ge 1 ] || die "usage: ceph-apt shell <dist>"; d=$1; shift; run "$d" -- shell "$@" ;;
+    help|-h|--help) usage ;;
+    *) usage 1 >&2 ;;
+esac
