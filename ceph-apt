@@ -25,6 +25,8 @@
 #   --release NAME    Ceph release name if the version is not known yet
 #   --keep            keep the build tree in WORK_DIR/build
 #   --prepare-only    stop after installing the build dependencies
+#   --changelog TEXT  changelog entry text, repeat for more items
+#                     (default: "Rebuild of upstream Ceph <version> for <dist>.")
 #   --force           overwrite packages already in the pool
 #
 # Settings come from ./ceph-apt.conf by default (see ceph-apt.conf.example).

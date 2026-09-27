@@ -44,6 +44,9 @@ Commands:
       --force                 Overwrite packages already in the pool
       --keep                  Keep the build tree in /work/build
       --prepare-only          Stop after installing the build dependencies
+      --changelog TEXT        Changelog entry text; repeat for more items
+                              (default: "Rebuild of upstream Ceph <version>
+                              for <codename>.")
   index [release...]          Regenerate the (unsigned) apt metadata
   shell                       Start an interactive shell
   help                        Show this help
@@ -164,6 +167,7 @@ fix_ownership() {
 
 cmd_build() {
     local version="" release="" rev=1 jobs="" with_dbg=0 force=0 keep=0 prepare_only=0
+    local changelog=()
     while [ $# -gt 0 ]; do
         case "$1" in
             --release) release=$2; shift ;;
@@ -173,6 +177,8 @@ cmd_build() {
             --force) force=1 ;;
             --keep) keep=1 ;;
             --prepare-only) prepare_only=1 ;;
+            --changelog) [ $# -ge 2 ] && [ -n "$2" ] || die "--changelog needs a text"
+                         changelog+=("$2"); shift ;;
             -*) die "unknown option $1" ;;
             *) [ -z "$version" ] || die "unexpected argument $1"; version=$1 ;;
         esac
@@ -221,11 +227,16 @@ cmd_build() {
     [ "$with_dbg" = 1 ] || strip_dbg_packages "$srcdir"
     apply_patches "$srcdir" "$release" "$codename" "$version"
 
-    (cd "$srcdir" && \
-        DEBFULLNAME="${DEBFULLNAME:-ceph-apt}" DEBEMAIL="${DEBEMAIL:-ceph-apt@localhost}" \
+    [ ${#changelog[@]} -gt 0 ] || changelog=("Rebuild of upstream Ceph $version for $codename.")
+    (
+        cd "$srcdir"
+        export DEBFULLNAME="${DEBFULLNAME:-ceph-apt}" DEBEMAIL="${DEBEMAIL:-ceph-apt@localhost}"
         dch --force-bad-version --no-auto-nmu --newversion "$debver" \
-            --distribution "$codename" --force-distribution \
-            "Rebuild of upstream Ceph $version for $codename.")
+            --distribution "$codename" --force-distribution -- "${changelog[0]}"
+        for item in "${changelog[@]:1}"; do
+            dch --append -- "$item"
+        done
+    )
 
     install_build_deps "$srcdir"
 

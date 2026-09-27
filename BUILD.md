@@ -85,6 +85,19 @@ it with `--rev`:
 - Clients upgrade normally: `…u2` is newer than `…u1`, and any later point
   release (`19.2.4-1~deb12u1`) is newer than both.
 
+Say what changed with `--changelog`. Each use becomes one item of the
+package's changelog entry (`/usr/share/doc/<package>/changelog.Debian.gz`):
+
+```sh
+./ceph-apt build 19.2.3 bookworm --rev 2 \
+    --changelog "Rebuild with the mgr Python 3.13 fix." \
+    --changelog "Build rgw_common without speculative devirtualization."
+./ceph-apt-cloudbuild build cpx62 19.2.3 trixie -- --rev 2 --changelog "…"
+```
+
+Without `--changelog` the entry reads "Rebuild of upstream Ceph <version> for
+<dist>."
+
 ### Repository layout
 
 ```
@@ -163,6 +176,7 @@ Build options (after `<version> <dist>`):
 | `--release NAME` | Ceph release name, if the version→name mapping doesn't know it yet |
 | `--keep` | keep the build tree in `WORK_DIR/build` |
 | `--prepare-only` | stop after installing the build dependencies (for debugging) |
+| `--changelog TEXT` | text of the changelog entry, one item per use (default: "Rebuild of upstream Ceph <version> for <dist>.") |
 | `--force` | overwrite packages already in the pool (don't use this for published versions) |
 
 If a build fails, the build tree stays in `WORK_DIR/build/` and the log is at
