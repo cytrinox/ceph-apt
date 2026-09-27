@@ -21,6 +21,17 @@ SIGNING_KEY=<fingerprint>
 # Keyring to use instead of ~/.gnupg (optional).
 #GNUPGHOME=/srv/ceph-apt/gnupg
 
+# `./ceph-apt publish` uploads REPO_DIR here with rsync (after index + sign).
+#PUBLISH_TARGET=user@host:htdocs/ceph
+# Extra rsync options, e.g. to leave out the build logs:
+#PUBLISH_RSYNC_OPTS="--exclude=buildlogs/"
+
+# `./ceph-apt fetch-incoming` takes the packages built by ./ceph-apt-cloudbuild from
+# here (same settings as ceph-apt-cloudbuild; may also come from the environment).
+#CEPH_APT_S3_URL=https://nbg1.your-objectstorage.com/ceph-apt/incoming
+#CEPH_APT_S3_ACCESS_KEY_ID=…
+#CEPH_APT_S3_SECRET_ACCESS_KEY=…
+
 # Release file fields. REPO_ORIGIN is what clients pin on.
 #REPO_ORIGIN=ceph-apt
 #REPO_LABEL=Ceph

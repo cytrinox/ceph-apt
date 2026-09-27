@@ -190,14 +190,91 @@ rsync -a --ignore-existing --exclude dists/ arm64-host:/srv/ceph-apt/repo/ /srv/
 ./ceph-apt sign
 ```
 
-## Publishing
+## Building on Hetzner Cloud
 
-Upload in two passes, so the packages are online before the metadata that
-references them:
+`./ceph-apt-cloudbuild` builds on a temporary Hetzner Cloud server, so no build
+host of your own is needed. It works from any machine with Python 3 and an
+OpenSSH client:
+
+1. Creates a temporary SSH key and a server of the given type (Debian 13).
+2. Installs podman, git and rclone, clones the repository and runs
+   `./ceph-apt image` and `./ceph-apt build` for each distribution.
+3. Uploads the new packages and build logs to S3, with the same layout as
+   `REPO_DIR` (`<release>/pool/…`, `<release>/buildlogs/…`).
+4. Deletes the server and the key, also when the build fails or you press
+   Ctrl-C.
+
+The server type decides the architecture: `cax*` (Ampere) builds arm64,
+`cpx*`/`ccx*` build amd64. Pick one with at least 32 GB RAM, e.g. `cax41`
+or `ccx43`. The server starts without a ccache, so every build is a full
+build.
 
 ```sh
-rsync -av --exclude dists/ /srv/ceph-apt/repo/ user@host:htdocs/ceph/
-rsync -av --delete-delay   /srv/ceph-apt/repo/ user@host:htdocs/ceph/
+export CEPH_APT_HCLOUD_TOKEN=…         # Hetzner Cloud API token (read & write)
+export CEPH_APT_S3_ACCESS_KEY_ID=… CEPH_APT_S3_SECRET_ACCESS_KEY=…
+export CEPH_APT_GIT_URL=https://github.com/cytrinox/ceph-apt.git   # default in the script
+export CEPH_APT_S3_URL=https://nbg1.your-objectstorage.com/ceph-apt/incoming   # default in the script
+export CEPH_APT_DEBFULLNAME="Your Name" CEPH_APT_DEBEMAIL=you@example.org  # optional
+
+./ceph-apt-cloudbuild build cax41 19.2.6 bookworm trixie
+./ceph-apt-cloudbuild build ccx43 19.2.6 trixie --location nbg1 -- --rev 2
+./ceph-apt-cloudbuild cleanup     # delete servers and keys this tool left behind
+```
+
+- Options after `--` go to `./ceph-apt build`.
+- `--ref` clones a specific branch or tag. The server clones the repository,
+  so local changes must be pushed first.
+- `--keep-on-failure` keeps a failed server for inspection and prints the SSH
+  command. Delete it afterwards with `cleanup`.
+- `--max-hours` (default 12) is the limit after which the server is deleted
+  regardless.
+- The full build log is kept in `~/.cache/ceph-apt-cloudbuild/<server name>/`.
+  The terminal only shows the steps and the compile progress.
+- If the script itself dies (e.g. your machine loses power), the server keeps
+  running and costs money. Run `cleanup` in that case.
+
+`CEPH_APT_S3_URL` is `https://<endpoint>/<bucket>[/<prefix>]` for any
+S3-compatible storage, or `s3://<bucket>[/<prefix>]` for AWS. For Hetzner
+Object Storage the region is derived from the endpoint; otherwise set
+`CEPH_APT_S3_REGION` if needed. Uploads use rclone's `--immutable`, so a package
+that already exists with different content is not overwritten.
+
+The cloud build only produces packages. To publish them, move them into
+`REPO_DIR` on the host that holds the signing key and publish from there:
+
+```sh
+./ceph-apt fetch-incoming     # S3 incoming/ → REPO_DIR (needs rclone)
+./ceph-apt publish            # index, sign, upload (see below)
+```
+
+`fetch-incoming` moves the files, so `incoming/` is empty afterwards. It
+never overwrites a file in the pool: a file that exists with different content
+stays in S3 and rclone reports an error. `--dry-run` shows what would be
+moved. It uses the same `CEPH_APT_S3_*` variables as `ceph-apt-cloudbuild`, taken
+from the environment or `ceph-apt.conf`.
+
+## Publishing
+
+`REPO_DIR` on the signing host is the master copy of the repository. Set
+`PUBLISH_TARGET` in `ceph-apt.conf` (any rsync destination, e.g.
+`user@host:htdocs/ceph`), then:
+
+```sh
+./ceph-apt publish                 # all releases
+./ceph-apt publish squid           # only re-index and re-sign squid
+./ceph-apt publish --key=<ID>      # sign with another key
+```
+
+`publish` runs `index` and `sign` and uploads in two passes, so the packages
+are online before the metadata that references them. It never deletes
+anything on the target. `PUBLISH_RSYNC_OPTS` adds rsync options, e.g.
+`--exclude=buildlogs/` to keep the build logs private.
+
+The same by hand:
+
+```sh
+rsync -av --exclude '/*/dists/' /srv/ceph-apt/repo/ user@host:htdocs/ceph/
+rsync -av                       /srv/ceph-apt/repo/ user@host:htdocs/ceph/
 ```
 
 Plan storage when choosing a free host. Every point release adds about 1.2 GB

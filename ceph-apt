@@ -6,6 +6,10 @@
 #   ./ceph-apt build 19.2.3 bookworm [opts]   build Ceph into the repo pool
 #   ./ceph-apt index [release...]             regenerate apt metadata (unsigned)
 #   ./ceph-apt sign [--key=ID] [release...]   sign it locally with your gpg
+#   ./ceph-apt fetch-incoming [--dry-run]     move packages built by ceph-apt-cloudbuild
+#                                             from S3 into the repo pool
+#   ./ceph-apt publish [--key=ID] [release...] index, sign and upload the repo
+#                                             to PUBLISH_TARGET with rsync
 #   ./ceph-apt shell bookworm                 debug shell in the builder
 #
 # Global options (before the command):
@@ -56,6 +60,8 @@ IMAGE=${IMAGE:-localhost/ceph-apt-builder}
 INDEX_DIST=${INDEX_DIST:-bookworm}
 ENGINE=${ENGINE:-$(command -v podman || command -v docker || true)}
 VOLUME_OPTS=${VOLUME_OPTS:-}
+# Where ./ceph-apt-cloudbuild uploads builds; keep in sync with DEFAULT_S3_URL there.
+CEPH_APT_S3_URL=${CEPH_APT_S3_URL:-https://nbg1.your-objectstorage.com/ceph-apt/incoming}
 
 # Settings forwarded into the container when set.
 PASS_ENV=(DEBFULLNAME DEBEMAIL ARCHES REPO_ORIGIN REPO_LABEL
@@ -199,6 +205,82 @@ cmd_sign() {
     echo "==> Signed $n suite(s) with $key, public key: $REPO_DIR/ceph-apt.asc" >&2
 }
 
+# Moves everything below CEPH_APT_S3_URL into REPO_DIR. Existing files are
+# never overwritten: a file that differs from the pool copy stays in S3 and
+# rclone reports an error.
+cmd_fetch_incoming() {
+    local url=$CEPH_APT_S3_URL rest host path region=${CEPH_APT_S3_REGION:-} opts=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --dry-run) opts+=(--dry-run) ;;
+            *) die "unknown option $1" ;;
+        esac
+        shift
+    done
+    command -v rclone > /dev/null || die "rclone not found"
+    [ -n "${CEPH_APT_S3_ACCESS_KEY_ID:-}" ] && [ -n "${CEPH_APT_S3_SECRET_ACCESS_KEY:-}" ] \
+        || die "set CEPH_APT_S3_ACCESS_KEY_ID and CEPH_APT_S3_SECRET_ACCESS_KEY"
+
+    case "$url" in
+        s3://*) host=""; path=${url#s3://} ;;
+        http://*/*|https://*/*) rest=${url#*://}; host=${rest%%/*}; path=${rest#*/} ;;
+        *) die "unsupported S3 URL $url, use https://<endpoint>/<bucket>[/<prefix>] or s3://<bucket>[/<prefix>]" ;;
+    esac
+    path=${path%/}
+    [ -n "$path" ] || die "no bucket in S3 URL $url"
+
+    # An rclone remote called "incoming", configured through the environment.
+    export RCLONE_CONFIG_INCOMING_TYPE=s3 RCLONE_CONFIG_INCOMING_NO_CHECK_BUCKET=true
+    export RCLONE_CONFIG_INCOMING_ACCESS_KEY_ID=$CEPH_APT_S3_ACCESS_KEY_ID
+    export RCLONE_CONFIG_INCOMING_SECRET_ACCESS_KEY=$CEPH_APT_S3_SECRET_ACCESS_KEY
+    if [ -n "$host" ]; then
+        export RCLONE_CONFIG_INCOMING_PROVIDER=Other RCLONE_CONFIG_INCOMING_ENDPOINT="${url%%://*}://$host"
+        # Hetzner Object Storage signs requests with its location as region.
+        if [ -z "$region" ] && [[ $host =~ ^([a-z0-9]+)\.your-objectstorage\.com$ ]]; then
+            region=${BASH_REMATCH[1]}
+        fi
+    else
+        export RCLONE_CONFIG_INCOMING_PROVIDER=AWS
+    fi
+    [ -z "$region" ] || export RCLONE_CONFIG_INCOMING_REGION=$region
+
+    mkdir -p "$REPO_DIR"
+    echo "==> Moving new files from $url to $REPO_DIR" >&2
+    rclone --config "" move --immutable --delete-empty-src-dirs --stats-one-line -v "${opts[@]}" \
+        "incoming:$path" "$REPO_DIR"
+    echo "==> Done. Run ./ceph-apt publish to index, sign and upload them." >&2
+}
+
+# Indexes and signs, then uploads REPO_DIR in two passes, so the packages are
+# online before the metadata that references them. Nothing is deleted on the
+# target.
+cmd_publish() {
+    local sign_opts=() releases=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --key=*) sign_opts+=("$1") ;;
+            --key) [ $# -ge 2 ] || die "--key needs a key ID"; sign_opts+=("--key=$2"); shift ;;
+            -*) die "unknown option $1" ;;
+            *) releases+=("$1") ;;
+        esac
+        shift
+    done
+    [ -n "${PUBLISH_TARGET:-}" ] || die "PUBLISH_TARGET is not set in $CONF"
+    command -v rsync > /dev/null || die "rsync not found"
+    local rsync_opts=()
+    # shellcheck disable=SC2206 # word splitting is intended
+    [ -z "${PUBLISH_RSYNC_OPTS:-}" ] || rsync_opts=($PUBLISH_RSYNC_OPTS)
+
+    cmd_index "${releases[@]}"
+    cmd_sign "${sign_opts[@]}" "${releases[@]}"
+
+    echo "==> Uploading packages to $PUBLISH_TARGET" >&2
+    rsync -a --exclude=/*/dists/ "${rsync_opts[@]}" "$REPO_DIR/" "$PUBLISH_TARGET/"
+    echo "==> Uploading metadata to $PUBLISH_TARGET" >&2
+    rsync -a "${rsync_opts[@]}" "$REPO_DIR/" "$PUBLISH_TARGET/"
+    echo "==> Published" >&2
+}
+
 cmd=${1:-help}
 [ $# -eq 0 ] || shift
 case "$cmd" in
@@ -206,6 +288,8 @@ case "$cmd" in
     build) cmd_build "$@" ;;
     index) cmd_index "$@" ;;
     sign) cmd_sign "$@" ;;
+    fetch-incoming) cmd_fetch_incoming "$@" ;;
+    publish) cmd_publish "$@" ;;
     shell) [ $# -ge 1 ] || die "usage: ceph-apt shell <dist>"; d=$1; shift; run "$d" -- shell "$@" ;;
     help|-h|--help) usage ;;
     *) usage 1 >&2 ;;

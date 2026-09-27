@@ -1,0 +1,436 @@
+#!/usr/bin/env python3
+"""ceph-apt-cloudbuild - build Ceph packages on a temporary Hetzner Cloud server.
+
+Creates a server of the given type, clones this repository there, builds the
+requested Ceph version for each distribution with ./ceph-apt, uploads the new
+packages and build logs to S3 and deletes the server again. The packages are
+built for the server's architecture: cax* types build arm64, cpx*/ccx* amd64.
+
+    ./ceph-apt-cloudbuild build cax41 19.2.6 bookworm trixie
+    ./ceph-apt-cloudbuild build ccx43 20.2.4 trixie -- --rev 2
+    ./ceph-apt-cloudbuild cleanup      # delete servers and keys left behind
+
+Environment:
+    CEPH_APT_HCLOUD_TOKEN          Hetzner Cloud API token (read & write), required
+    CEPH_APT_GIT_URL               repository the server clones (default below);
+                                   for a private repository include a read-only token
+    CEPH_APT_S3_URL                upload target (default below), either
+                                   https://<endpoint>/<bucket>[/<prefix>] or
+                                   s3://<bucket>[/<prefix>] for AWS
+    CEPH_APT_S3_ACCESS_KEY_ID      S3 credentials, required
+    CEPH_APT_S3_SECRET_ACCESS_KEY
+    CEPH_APT_S3_REGION             S3 region (optional; derived for Hetzner
+                                   Object Storage endpoints)
+    CEPH_APT_DEBFULLNAME           changelog entry of the packages (optional)
+    CEPH_APT_DEBEMAIL
+
+Only the Python standard library and an OpenSSH client are needed.
+"""
+
+import argparse
+import json
+import os
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from pathlib import Path
+
+# Defaults for CEPH_APT_GIT_URL and CEPH_APT_S3_URL. Adjust to your setup.
+DEFAULT_GIT_URL = "https://github.com/cytrinox/ceph-apt.git"
+DEFAULT_S3_URL = "https://nbg1.your-objectstorage.com/ceph-apt/incoming"
+
+API_URL = "https://api.hetzner.cloud/v1"
+LABELS = {"managed-by": "ceph-apt-cloudbuild"}
+LABEL_SELECTOR = ",".join(f"{k}={v}" for k, v in LABELS.items())
+STATE_DIR = Path.home() / ".cache" / "ceph-apt-cloudbuild"
+POLL_SECONDS = 30
+
+# Runs on the build server under systemd-run, so it survives SSH disconnects.
+# Usage: ceph-apt-build.sh <version> <dist>... [-- <ceph-apt build options>]
+REMOTE_SCRIPT = r"""#!/bin/bash
+set -uo pipefail
+status=1
+trap 'echo "$status" > /root/build.status' EXIT
+set -e
+# shellcheck disable=SC1091
+. /root/ceph-apt.env
+export DEBIAN_FRONTEND=noninteractive
+log() { printf '==> %s\n' "$*"; }
+REPO=/srv/ceph-apt/repo
+
+cloud-init status --wait > /dev/null 2>&1 || true
+log "Installing podman, catatonit, git and rclone"
+apt-get update -q
+apt-get install -y -q --no-install-recommends ca-certificates catatonit git podman rclone
+
+log "Cloning $GIT_URL_DISPLAY${GIT_REF:+ ($GIT_REF)}"
+git clone -q --depth 1 ${GIT_REF:+--branch "$GIT_REF"} "$GIT_URL" /root/ceph-apt
+cd /root/ceph-apt
+log "Using commit $(git log -1 --format='%h %s')"
+cat > ceph-apt.conf <<EOF
+REPO_DIR=$REPO
+WORK_DIR=/srv/ceph-apt/work
+CACHE_DIR=/srv/ceph-apt/ccache
+EOF
+
+version=$1
+shift
+dists=()
+while [ $# -gt 0 ] && [ "$1" != -- ]; do dists+=("$1"); shift; done
+[ $# -eq 0 ] || shift
+
+failed=()
+for dist in "${dists[@]}"; do
+    log "Building the $dist builder image"
+    if ! ./ceph-apt image "$dist"; then
+        failed+=("$dist")
+        continue
+    fi
+    log "Building Ceph $version for $dist"
+    ./ceph-apt build "$version" "$dist" "$@" || failed+=("$dist")
+done
+
+debs=$(find "$REPO" -name '*.deb' | wc -l)
+if [ "$debs" -gt 0 ]; then
+    log "Uploading $debs packages and the build logs to $S3_DISPLAY"
+    rclone --config "" copy --immutable --stats-one-line -v "$REPO" "$S3_TARGET"
+fi
+
+if [ ${#failed[@]} -gt 0 ]; then
+    echo "ERROR: build failed for: ${failed[*]}"
+    exit 1
+fi
+log "All builds finished"
+status=0
+"""
+
+
+class Error(Exception):
+    pass
+
+
+def log(msg):
+    print(f"==> {msg}", flush=True)
+
+
+def require_env(name):
+    value = os.environ.get(name)
+    if not value:
+        raise Error(f"environment variable {name} is not set")
+    return value
+
+
+def strip_credentials(url):
+    """URL without user:password@, for log output."""
+    parts = urllib.parse.urlsplit(url)
+    if "@" not in parts.netloc:
+        return url
+    return urllib.parse.urlunsplit(parts._replace(netloc=parts.netloc.rsplit("@", 1)[1]))
+
+
+def parse_s3_url(url):
+    """Returns (endpoint or None, bucket, prefix) for an S3 upload URL."""
+    parts = urllib.parse.urlsplit(url)
+    if parts.scheme == "s3":
+        endpoint, path = None, parts.netloc + parts.path
+    elif parts.scheme in ("http", "https") and parts.netloc:
+        endpoint, path = f"{parts.scheme}://{parts.netloc}", parts.path
+    else:
+        raise Error(f"unsupported S3 URL {url!r}, use https://<endpoint>/<bucket>[/<prefix>] or s3://<bucket>[/<prefix>]")
+    bucket, _, prefix = path.strip("/").partition("/")
+    if not bucket:
+        raise Error(f"no bucket in S3 URL {url!r}")
+    return endpoint, bucket, prefix.strip("/")
+
+
+def rclone_env(s3_url, access_key, secret_key, region):
+    """rclone settings for a remote called "dest", plus the upload target."""
+    endpoint, bucket, prefix = parse_s3_url(s3_url)
+    env = {
+        "RCLONE_CONFIG_DEST_TYPE": "s3",
+        "RCLONE_CONFIG_DEST_PROVIDER": "Other" if endpoint else "AWS",
+        "RCLONE_CONFIG_DEST_ACCESS_KEY_ID": access_key,
+        "RCLONE_CONFIG_DEST_SECRET_ACCESS_KEY": secret_key,
+        "RCLONE_CONFIG_DEST_NO_CHECK_BUCKET": "true",
+    }
+    if endpoint:
+        env["RCLONE_CONFIG_DEST_ENDPOINT"] = endpoint
+        # Hetzner Object Storage signs requests with its location as region.
+        m = re.fullmatch(r"https?://([a-z0-9]+)\.your-objectstorage\.com", endpoint)
+        if not region and m:
+            region = m.group(1)
+    if region:
+        env["RCLONE_CONFIG_DEST_REGION"] = region
+    env["S3_TARGET"] = f"dest:{bucket}/{prefix}" if prefix else f"dest:{bucket}"
+    env["S3_DISPLAY"] = s3_url
+    return env
+
+
+class HCloud:
+    def __init__(self, token):
+        self.token = token
+
+    def request(self, method, path, body=None):
+        data = json.dumps(body).encode() if body is not None else None
+        req = urllib.request.Request(
+            API_URL + path, data=data, method=method,
+            headers={"Authorization": f"Bearer {self.token}", "Content-Type": "application/json"})
+        # Retry only requests that are safe to repeat.
+        attempts = 3 if method in ("GET", "DELETE") else 1
+        for attempt in range(attempts):
+            try:
+                with urllib.request.urlopen(req, timeout=60) as resp:
+                    raw = resp.read()
+                return json.loads(raw) if raw else {}
+            except urllib.error.HTTPError as e:
+                try:
+                    err = json.loads(e.read())["error"]
+                    msg = f"{err['code']}: {err['message']}"
+                except Exception:
+                    msg = str(e)
+                if e.code < 500 or attempt == attempts - 1:
+                    raise Error(f"Hetzner API {method} {path}: {msg}") from None
+            except urllib.error.URLError as e:
+                if attempt == attempts - 1:
+                    raise Error(f"Hetzner API {method} {path}: {e.reason}") from None
+            time.sleep(5)
+
+    def list(self, kind):
+        selector = urllib.parse.quote(LABEL_SELECTOR)
+        return self.request("GET", f"/{kind}?label_selector={selector}&per_page=50")[kind]
+
+
+class Remote:
+    def __init__(self, ip, key, known_hosts):
+        self.ip = ip
+        self.ssh = ["ssh", "-i", str(key), "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes",
+                    "-o", "StrictHostKeyChecking=accept-new",
+                    "-o", f"UserKnownHostsFile={known_hosts}",
+                    "-o", "ConnectTimeout=15", "-o", "ServerAliveInterval=30",
+                    "-o", "LogLevel=ERROR", f"root@{ip}"]
+
+    def run(self, command, stdin=None, check=True, timeout=300):
+        res = subprocess.run(self.ssh + [command], input=stdin, capture_output=True, timeout=timeout)
+        if check and res.returncode != 0:
+            raise Error(f"remote command failed ({res.returncode}): {command}\n"
+                        + res.stderr.decode(errors="replace").strip())
+        return res
+
+    def put(self, path, content):
+        self.run(f"umask 077 && cat > {shlex.quote(path)}", stdin=content.encode())
+
+    def wait_for_ssh(self, timeout=600):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                if self.run("true", check=False, timeout=30).returncode == 0:
+                    return
+            except subprocess.TimeoutExpired:
+                pass
+            time.sleep(5)
+        raise Error(f"SSH to {self.ip} did not come up within {timeout}s")
+
+
+def wait_running(hc, server_id, timeout=600):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if hc.request("GET", f"/servers/{server_id}")["server"]["status"] == "running":
+            return
+        time.sleep(5)
+    raise Error(f"server did not start within {timeout}s")
+
+
+def follow_build(remote, log_path, max_hours):
+    """Streams the remote log into log_path until the build ends. Returns True on success."""
+    offset, pending, pct, last_pct, ssh_failures = 0, "", None, None, 0
+    deadline = time.monotonic() + max_hours * 3600
+    state_cmd = ("if [ -f /root/build.status ]; then cat /root/build.status; "
+                 "elif systemctl is-active -q ceph-apt-build; then echo running; else echo lost; fi")
+    with open(log_path, "ab") as out:
+        while True:
+            try:
+                state = remote.run(state_cmd, timeout=120).stdout.decode().strip()
+                chunk = remote.run(f"tail -c +{offset + 1} /root/build.log 2>/dev/null",
+                                   check=False, timeout=600).stdout
+                ssh_failures = 0
+            except (Error, subprocess.TimeoutExpired) as e:
+                ssh_failures += 1
+                if ssh_failures >= 20:
+                    raise Error(f"lost the connection to the server: {e}")
+                time.sleep(POLL_SECONDS)
+                continue
+
+            out.write(chunk)
+            out.flush()
+            offset += len(chunk)
+            lines = (pending + chunk.decode(errors="replace")).split("\n")
+            pending = lines.pop()
+            for line in lines:
+                if line.startswith(("==>", "ERROR", "WARNING", "E: ")):
+                    print(line, flush=True)
+                    pct = last_pct = None  # a new step, the old progress is stale
+                elif m := re.match(r"\[\s*(\d+)%\]", line):
+                    pct = int(m.group(1))
+            if state == "running" and pct is not None and pct != last_pct:
+                print(f"    ... compiling, {pct}% of the current build", flush=True)
+                last_pct = pct
+
+            if state != "running":
+                if pending:
+                    print(pending, flush=True)
+                if state == "lost":
+                    print("ERROR: the build stopped without reporting a result", flush=True)
+                return state == "0"
+            if time.monotonic() > deadline:
+                raise Error(f"the build did not finish within {max_hours} hours")
+            time.sleep(POLL_SECONDS)
+
+
+def cmd_build(args, build_opts):
+    hc = HCloud(require_env("CEPH_APT_HCLOUD_TOKEN"))
+    git_url = os.environ.get("CEPH_APT_GIT_URL", DEFAULT_GIT_URL)
+    s3_url = os.environ.get("CEPH_APT_S3_URL", DEFAULT_S3_URL)
+    env = rclone_env(s3_url, require_env("CEPH_APT_S3_ACCESS_KEY_ID"),
+                     require_env("CEPH_APT_S3_SECRET_ACCESS_KEY"), os.environ.get("CEPH_APT_S3_REGION"))
+    env.update(GIT_URL=git_url, GIT_URL_DISPLAY=strip_credentials(git_url), GIT_REF=args.ref or "")
+    for name in ("DEBFULLNAME", "DEBEMAIL"):
+        if os.environ.get(f"CEPH_APT_{name}"):
+            env[name] = os.environ[f"CEPH_APT_{name}"]
+
+    if not re.fullmatch(r"\d+\.\d+\.\d+", args.version):
+        raise Error(f"invalid Ceph version {args.version!r}")
+    for dist in args.dists:
+        if not re.fullmatch(r"[a-z]+", dist):
+            raise Error(f"invalid distribution {dist!r}")
+    if not shutil.which("ssh") or not shutil.which("ssh-keygen"):
+        raise Error("ssh and ssh-keygen are required")
+
+    name = f"ceph-apt-{args.version.replace('.', '-')}-{args.server_type}-{time.strftime('%Y%m%d-%H%M%S')}"
+    workdir = STATE_DIR / name
+    workdir.mkdir(parents=True, mode=0o700)
+    key, known_hosts, log_path = workdir / "id_ed25519", workdir / "known_hosts", workdir / "build.log"
+    subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", name, "-f", str(key)], check=True)
+
+    ssh_key_id = server_id = ip = None
+    ok = False
+    try:
+        ssh_key_id = hc.request("POST", "/ssh_keys", {
+            "name": name, "public_key": key.with_suffix(".pub").read_text().strip(),
+            "labels": LABELS})["ssh_key"]["id"]
+
+        log(f"Creating {args.server_type} server {name}")
+        body = {"name": name, "server_type": args.server_type, "image": args.image,
+                "ssh_keys": [ssh_key_id], "labels": LABELS, "start_after_create": True,
+                "public_net": {"enable_ipv4": True, "enable_ipv6": True}}
+        if args.location:
+            body["location"] = args.location
+        server = hc.request("POST", "/servers", body)["server"]
+        server_id = server["id"]
+        ip = server["public_net"]["ipv4"]["ip"]
+        # Only informational; newer API versions dropped "datacenter" for "location".
+        loc = server.get("location") or (server.get("datacenter") or {}).get("location") or {}
+        stype = server.get("server_type") or {}
+        log(f"Server {server_id} at {ip} in {loc.get('name', '?')}, "
+            f"{stype.get('cores', '?')} cores, {stype.get('memory', '?')} GB RAM")
+
+        wait_running(hc, server_id)
+        remote = Remote(ip, key, known_hosts)
+        remote.wait_for_ssh()
+
+        remote.put("/root/ceph-apt.env",
+                   "".join(f"export {k}={shlex.quote(v)}\n" for k, v in env.items()))
+        remote.put("/root/ceph-apt-build.sh", REMOTE_SCRIPT)
+        args_str = " ".join(shlex.quote(a) for a in [args.version, *args.dists, "--", *build_opts])
+        remote.run("systemd-run --quiet --unit=ceph-apt-build"
+                   " -p StandardOutput=append:/root/build.log -p StandardError=append:/root/build.log"
+                   f" /bin/bash /root/ceph-apt-build.sh {args_str}")
+        log(f"Build started, full log: {log_path}")
+
+        ok = follow_build(remote, log_path, args.max_hours)
+    except KeyboardInterrupt:
+        print("\nInterrupted", flush=True)
+    finally:
+        keep = args.keep or (not ok and args.keep_on_failure)
+        if server_id and keep:
+            log(f"Keeping server {name}, connect with: ssh -i {key} root@{ip}")
+            log("Delete it with: ./ceph-apt-cloudbuild cleanup")
+        else:
+            try:
+                if server_id:
+                    log(f"Deleting server {name}")
+                    hc.request("DELETE", f"/servers/{server_id}")
+                if ssh_key_id:
+                    hc.request("DELETE", f"/ssh_keys/{ssh_key_id}")
+                for f in (key, key.with_suffix(".pub"), known_hosts):
+                    f.unlink(missing_ok=True)
+            except Error as e:
+                print(f"ERROR: {e}\nThe server may still exist, run: ./ceph-apt-cloudbuild cleanup",
+                      file=sys.stderr, flush=True)
+                ok = False
+
+    log(f"{'Success' if ok else 'FAILED'}, full log: {log_path}")
+    return 0 if ok else 1
+
+
+def cmd_cleanup(args, _):
+    hc = HCloud(require_env("CEPH_APT_HCLOUD_TOKEN"))
+    servers, keys = hc.list("servers"), hc.list("ssh_keys")
+    if not servers and not keys:
+        log("Nothing to clean up")
+    for s in servers:
+        log(f"Deleting server {s['name']} ({s['server_type']['name']}, {s['status']})")
+        hc.request("DELETE", f"/servers/{s['id']}")
+    for k in keys:
+        log(f"Deleting SSH key {k['name']}")
+        hc.request("DELETE", f"/ssh_keys/{k['id']}")
+    for d in STATE_DIR.glob("*/id_ed25519*"):
+        d.unlink()
+    return 0
+
+
+def main(argv):
+    # Everything after "--" is passed to ./ceph-apt build unchanged.
+    build_opts = []
+    if "--" in argv:
+        i = argv.index("--")
+        argv, build_opts = argv[:i], argv[i + 1:]
+
+    parser = argparse.ArgumentParser(
+        description="Build Ceph packages on a temporary Hetzner Cloud server.",
+        epilog="Options after -- are passed to ./ceph-apt build, e.g. -- --rev 2")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    b = sub.add_parser("build", help="build on a new server, upload to S3, delete the server")
+    b.add_argument("server_type", help="Hetzner server type, e.g. cax41 (arm64) or ccx43 (amd64)")
+    b.add_argument("version", help="Ceph version, e.g. 19.2.6")
+    b.add_argument("dists", nargs="+", metavar="dist", help="distributions, e.g. bookworm trixie")
+    b.add_argument("--location", help="Hetzner location, e.g. fsn1, nbg1, hel1 (default: chosen by Hetzner)")
+    b.add_argument("--image", default="debian-13", help="server OS image (default: %(default)s)")
+    b.add_argument("--ref", help="branch or tag to clone (default: the repository's default branch)")
+    b.add_argument("--max-hours", type=float, default=12,
+                   help="give up and delete the server after this many hours (default: %(default)s)")
+    b.add_argument("--keep", action="store_true", help="keep the server after the build")
+    b.add_argument("--keep-on-failure", action="store_true", help="keep the server if the build fails")
+    b.set_defaults(func=cmd_build)
+
+    c = sub.add_parser("cleanup", help="delete all servers and SSH keys created by this tool")
+    c.set_defaults(func=cmd_cleanup)
+
+    args = parser.parse_args(argv)
+    if build_opts and args.command != "build":
+        parser.error("options after -- are only accepted by build")
+    return args.func(args, build_opts)
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except Error as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        sys.exit(1)
