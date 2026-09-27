@@ -11,7 +11,8 @@ into it.
 - Distributions: Debian bookworm/trixie/forky, Ubuntu jammy/noble (any
   `debian:`/`ubuntu:` base image should work)
 - Architectures: amd64 and arm64, each built natively on a host of that arch
-- Output: a static directory tree you can `rsync` to any web hosting
+- Output: a static directory tree, published to S3 (e.g. Hetzner Object
+  Storage) and served from there
 
 ## How it works
 
@@ -26,9 +27,9 @@ repo/<release>/dists/<dist>/{Release,main/binary-*/Packages}
         │  ./ceph-apt sign                      (host, your own gpg)
         ▼
 repo/<release>/dists/<dist>/{InRelease,Release.gpg}
-        │  rsync
+        │  ./ceph-apt publish                   (index + sign + upload with rclone)
         ▼
-https://ceph-apt.cytrinox.net/<release>
+S3 bucket → https://ceph-apt.cytrinox.net/<release>
 ```
 
 - `build` uses the `debian/` directory that ships in the upstream release
@@ -255,9 +256,10 @@ from the environment or `ceph-apt.conf`.
 
 ## Publishing
 
-`REPO_DIR` on the signing host is the master copy of the repository. Set
-`PUBLISH_TARGET` in `ceph-apt.conf` (any rsync destination, e.g.
-`user@host:htdocs/ceph`), then:
+`REPO_DIR` on the signing host is the master copy of the repository.
+`publish` uploads it to `CEPH_APT_S3_PUBLISH_URL` (default
+`https://nbg1.your-objectstorage.com/ceph-apt/repo`) with rclone, using the
+same `CEPH_APT_S3_*` credentials as `fetch-incoming`:
 
 ```sh
 ./ceph-apt publish                 # all releases
@@ -265,21 +267,21 @@ from the environment or `ceph-apt.conf`.
 ./ceph-apt publish --key=<ID>      # sign with another key
 ```
 
-`publish` runs `index` and `sign` and uploads in two passes, so the packages
-are online before the metadata that references them. It never deletes
-anything on the target. `PUBLISH_RSYNC_OPTS` adds rsync options, e.g.
-`--exclude=buildlogs/` to keep the build logs private.
+`publish` runs `index` and `sign`, then uploads in three passes so that
+clients never see metadata that references missing files: first the packages
+(and build logs and the public key), then the `Packages` indexes, then the
+signed `Release`, `InRelease` and `Release.gpg`. It never deletes anything in
+the bucket.
 
-The same by hand:
+apt clients need anonymous read access to the published prefix, e.g. through
+a bucket policy that allows `s3:GetObject` on `ceph-apt/repo/*`. With the
+default settings the repository is then reachable at
+`https://ceph-apt.nbg1.your-objectstorage.com/repo/<release>`; put that
+behind your own domain if you want a stable URL. `incoming/` holds unsigned
+packages and does not need to be public.
 
-```sh
-rsync -av --exclude '/*/dists/' /srv/ceph-apt/repo/ user@host:htdocs/ceph/
-rsync -av                       /srv/ceph-apt/repo/ user@host:htdocs/ceph/
-```
-
-Plan storage when choosing a free host. Every point release adds about 1.2 GB
-per distribution and arch, and many free static hosts cap total size at around
-1 GB or single files at 25–100 MB. Ceph's largest `.deb`s are around 50 MB.
+Storage grows with every point release: about 1.2 GB per distribution and
+arch, without debug packages.
 
 ## Using the repository
 

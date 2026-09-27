@@ -9,7 +9,7 @@
 #   ./ceph-apt fetch-incoming [--dry-run]     move packages built by ceph-apt-cloudbuild
 #                                             from S3 into the repo pool
 #   ./ceph-apt publish [--key=ID] [release...] index, sign and upload the repo
-#                                             to PUBLISH_TARGET with rsync
+#                                             to CEPH_APT_S3_PUBLISH_URL
 #   ./ceph-apt shell bookworm                 debug shell in the builder
 #
 # Global options (before the command):
@@ -62,6 +62,8 @@ ENGINE=${ENGINE:-$(command -v podman || command -v docker || true)}
 VOLUME_OPTS=${VOLUME_OPTS:-}
 # Where ./ceph-apt-cloudbuild uploads builds; keep in sync with DEFAULT_S3_URL there.
 CEPH_APT_S3_URL=${CEPH_APT_S3_URL:-https://nbg1.your-objectstorage.com/ceph-apt/incoming}
+# Where `publish` uploads the signed repository.
+CEPH_APT_S3_PUBLISH_URL=${CEPH_APT_S3_PUBLISH_URL:-https://nbg1.your-objectstorage.com/ceph-apt/repo}
 
 # Settings forwarded into the container when set.
 PASS_ENV=(DEBFULLNAME DEBEMAIL ARCHES REPO_ORIGIN REPO_LABEL
@@ -205,22 +207,20 @@ cmd_sign() {
     echo "==> Signed $n suite(s) with $key, public key: $REPO_DIR/ceph-apt.asc" >&2
 }
 
-# Moves everything below CEPH_APT_S3_URL into REPO_DIR. Existing files are
-# never overwritten: a file that differs from the pool copy stays in S3 and
-# rclone reports an error.
-cmd_fetch_incoming() {
-    local url=$CEPH_APT_S3_URL rest host path region=${CEPH_APT_S3_REGION:-} opts=()
-    while [ $# -gt 0 ]; do
-        case "$1" in
-            --dry-run) opts+=(--dry-run) ;;
-            *) die "unknown option $1" ;;
-        esac
-        shift
-    done
+# rclone <args...>: rclone without a config file; remotes come from the
+# environment (see s3_remote).
+rclone() {
     command -v rclone > /dev/null || die "rclone not found"
+    command rclone --config "" "$@"
+}
+
+# s3_remote <name> <url>: configures the rclone remote <name> for an S3 URL
+# (https://<endpoint>/<bucket>[/<prefix>] or s3://<bucket>[/<prefix>]) and
+# sets S3_REMOTE to the remote path, e.g. "incoming:ceph-apt/incoming".
+s3_remote() {
+    local name=$1 url=$2 rest host path region=${CEPH_APT_S3_REGION:-} var
     [ -n "${CEPH_APT_S3_ACCESS_KEY_ID:-}" ] && [ -n "${CEPH_APT_S3_SECRET_ACCESS_KEY:-}" ] \
         || die "set CEPH_APT_S3_ACCESS_KEY_ID and CEPH_APT_S3_SECRET_ACCESS_KEY"
-
     case "$url" in
         s3://*) host=""; path=${url#s3://} ;;
         http://*/*|https://*/*) rest=${url#*://}; host=${rest%%/*}; path=${rest#*/} ;;
@@ -229,31 +229,47 @@ cmd_fetch_incoming() {
     path=${path%/}
     [ -n "$path" ] || die "no bucket in S3 URL $url"
 
-    # An rclone remote called "incoming", configured through the environment.
-    export RCLONE_CONFIG_INCOMING_TYPE=s3 RCLONE_CONFIG_INCOMING_NO_CHECK_BUCKET=true
-    export RCLONE_CONFIG_INCOMING_ACCESS_KEY_ID=$CEPH_APT_S3_ACCESS_KEY_ID
-    export RCLONE_CONFIG_INCOMING_SECRET_ACCESS_KEY=$CEPH_APT_S3_SECRET_ACCESS_KEY
+    var=RCLONE_CONFIG_${name^^}
+    export "${var}_TYPE=s3" "${var}_NO_CHECK_BUCKET=true"
+    export "${var}_ACCESS_KEY_ID=$CEPH_APT_S3_ACCESS_KEY_ID"
+    export "${var}_SECRET_ACCESS_KEY=$CEPH_APT_S3_SECRET_ACCESS_KEY"
     if [ -n "$host" ]; then
-        export RCLONE_CONFIG_INCOMING_PROVIDER=Other RCLONE_CONFIG_INCOMING_ENDPOINT="${url%%://*}://$host"
+        export "${var}_PROVIDER=Other" "${var}_ENDPOINT=${url%%://*}://$host"
         # Hetzner Object Storage signs requests with its location as region.
         if [ -z "$region" ] && [[ $host =~ ^([a-z0-9]+)\.your-objectstorage\.com$ ]]; then
             region=${BASH_REMATCH[1]}
         fi
     else
-        export RCLONE_CONFIG_INCOMING_PROVIDER=AWS
+        export "${var}_PROVIDER=AWS"
     fi
-    [ -z "$region" ] || export RCLONE_CONFIG_INCOMING_REGION=$region
+    [ -z "$region" ] || export "${var}_REGION=$region"
+    S3_REMOTE=$name:$path
+}
+
+# Moves everything below CEPH_APT_S3_URL into REPO_DIR. Existing files are
+# never overwritten: a file that differs from the pool copy stays in S3 and
+# rclone reports an error.
+cmd_fetch_incoming() {
+    local opts=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --dry-run) opts+=(--dry-run) ;;
+            *) die "unknown option $1" ;;
+        esac
+        shift
+    done
+    s3_remote incoming "$CEPH_APT_S3_URL"
 
     mkdir -p "$REPO_DIR"
-    echo "==> Moving new files from $url to $REPO_DIR" >&2
-    rclone --config "" move --immutable --delete-empty-src-dirs --stats-one-line -v "${opts[@]}" \
-        "incoming:$path" "$REPO_DIR"
+    echo "==> Moving new files from $CEPH_APT_S3_URL to $REPO_DIR" >&2
+    rclone move --immutable --delete-empty-src-dirs --stats-one-line -v "${opts[@]}" "$S3_REMOTE" "$REPO_DIR"
     echo "==> Done. Run ./ceph-apt publish to index, sign and upload them." >&2
 }
 
-# Indexes and signs, then uploads REPO_DIR in two passes, so the packages are
-# online before the metadata that references them. Nothing is deleted on the
-# target.
+# Indexes and signs, then uploads REPO_DIR to CEPH_APT_S3_PUBLISH_URL in three
+# passes, so clients never see metadata that references missing files:
+# packages first, then the package indexes, then the signed Release files.
+# Nothing is deleted on the target.
 cmd_publish() {
     local sign_opts=() releases=()
     while [ $# -gt 0 ]; do
@@ -265,19 +281,18 @@ cmd_publish() {
         esac
         shift
     done
-    [ -n "${PUBLISH_TARGET:-}" ] || die "PUBLISH_TARGET is not set in $CONF"
-    command -v rsync > /dev/null || die "rsync not found"
-    local rsync_opts=()
-    # shellcheck disable=SC2206 # word splitting is intended
-    [ -z "${PUBLISH_RSYNC_OPTS:-}" ] || rsync_opts=($PUBLISH_RSYNC_OPTS)
+    s3_remote publish "$CEPH_APT_S3_PUBLISH_URL"
 
     cmd_index "${releases[@]}"
     cmd_sign "${sign_opts[@]}" "${releases[@]}"
 
-    echo "==> Uploading packages to $PUBLISH_TARGET" >&2
-    rsync -a --exclude=/*/dists/ "${rsync_opts[@]}" "$REPO_DIR/" "$PUBLISH_TARGET/"
-    echo "==> Uploading metadata to $PUBLISH_TARGET" >&2
-    rsync -a "${rsync_opts[@]}" "$REPO_DIR/" "$PUBLISH_TARGET/"
+    local copy=(rclone copy --stats-one-line -v "$REPO_DIR" "$S3_REMOTE")
+    echo "==> Uploading packages to $CEPH_APT_S3_PUBLISH_URL" >&2
+    "${copy[@]}" --exclude '/*/dists/**'
+    echo "==> Uploading package indexes" >&2
+    "${copy[@]}" --include '/*/dists/*/main/**'
+    echo "==> Uploading signed Release files" >&2
+    "${copy[@]}" --include '/*/dists/*/{Release,InRelease,Release.gpg}'
     echo "==> Published" >&2
 }
 
