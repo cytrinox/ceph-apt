@@ -219,6 +219,11 @@ OpenSSH client:
 4. Deletes the server and the key, also when the build fails or you press
    Ctrl-C.
 
+Before creating the server it checks the Hetzner token and server type, that
+the repository and `--ref` are reachable (with the local `git`, if installed),
+and that it can upload to and delete from `CEPH_APT_S3_URL`. A wrong setting
+therefore fails immediately, not after hours of building.
+
 The server type decides the architecture: `cax*` (Ampere) builds arm64,
 `cpx*`/`ccx*` build amd64. Pick one with at least 32 GB RAM, e.g. `cax41`
 or `ccx43`. The server starts without a ccache, so every build is a full

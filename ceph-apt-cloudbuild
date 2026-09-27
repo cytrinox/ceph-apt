@@ -8,6 +8,9 @@ Only the Python standard library and an OpenSSH client are needed.
 """
 
 import argparse
+import datetime
+import hashlib
+import hmac
 import json
 import os
 import re
@@ -48,6 +51,11 @@ cloud-init status --wait > /dev/null 2>&1 || true
 log "Installing podman, catatonit, git and rclone"
 apt-get update -q
 apt-get install -y -q --no-install-recommends ca-certificates catatonit git podman rclone
+
+log "Checking the S3 upload"
+echo check > /tmp/upload-check
+rclone --config "" copyto /tmp/upload-check "$S3_TARGET/.ceph-apt-cloudbuild-check"
+rclone --config "" deletefile "$S3_TARGET/.ceph-apt-cloudbuild-check"
 
 log "Cloning $GIT_URL_DISPLAY${GIT_REF:+ ($GIT_REF)}"
 git clone -q --depth 1 ${GIT_REF:+--branch "$GIT_REF"} "$GIT_URL" /root/ceph-apt
@@ -129,9 +137,17 @@ def parse_s3_url(url):
     return endpoint, bucket, prefix.strip("/")
 
 
+def s3_region(endpoint, region):
+    """The configured region, or the one Hetzner Object Storage endpoints imply."""
+    # Hetzner Object Storage signs requests with its location as region.
+    m = endpoint and re.fullmatch(r"https?://([a-z0-9]+)\.your-objectstorage\.com", endpoint)
+    return region or (m.group(1) if m else None)
+
+
 def rclone_env(s3_url, access_key, secret_key, region):
     """rclone settings for a remote called "dest", plus the upload target."""
     endpoint, bucket, prefix = parse_s3_url(s3_url)
+    region = s3_region(endpoint, region)
     env = {
         "RCLONE_CONFIG_DEST_TYPE": "s3",
         "RCLONE_CONFIG_DEST_PROVIDER": "Other" if endpoint else "AWS",
@@ -141,15 +157,81 @@ def rclone_env(s3_url, access_key, secret_key, region):
     }
     if endpoint:
         env["RCLONE_CONFIG_DEST_ENDPOINT"] = endpoint
-        # Hetzner Object Storage signs requests with its location as region.
-        m = re.fullmatch(r"https?://([a-z0-9]+)\.your-objectstorage\.com", endpoint)
-        if not region and m:
-            region = m.group(1)
     if region:
         env["RCLONE_CONFIG_DEST_REGION"] = region
     env["S3_TARGET"] = f"dest:{bucket}/{prefix}" if prefix else f"dest:{bucket}"
     env["S3_DISPLAY"] = s3_url
     return env
+
+
+def s3_request(method, s3_url, key, access_key, secret_key, region, body=b""):
+    """A signed (AWS SigV4) path-style S3 request for <prefix>/<key>."""
+    endpoint, bucket, prefix = parse_s3_url(s3_url)
+    region = s3_region(endpoint, region) or "us-east-1"
+    endpoint = endpoint or f"https://s3.{region}.amazonaws.com"
+    host = urllib.parse.urlsplit(endpoint).netloc
+    path = "/" + urllib.parse.quote("/".join(p for p in (bucket, prefix, key) if p), safe="/-_.~")
+    now = datetime.datetime.now(datetime.timezone.utc)
+    amz_date, day = now.strftime("%Y%m%dT%H%M%SZ"), now.strftime("%Y%m%d")
+    payload_hash = hashlib.sha256(body).hexdigest()
+    headers = {"host": host, "x-amz-content-sha256": payload_hash, "x-amz-date": amz_date}
+    signed = ";".join(sorted(headers))
+    canonical = "\n".join([method, path, "", *(f"{k}:{headers[k]}" for k in sorted(headers)),
+                           "", signed, payload_hash])
+    scope = f"{day}/{region}/s3/aws4_request"
+    to_sign = "\n".join(["AWS4-HMAC-SHA256", amz_date, scope, hashlib.sha256(canonical.encode()).hexdigest()])
+    k = f"AWS4{secret_key}".encode()
+    for part in (day, region, "s3", "aws4_request"):
+        k = hmac.new(k, part.encode(), hashlib.sha256).digest()
+    signature = hmac.new(k, to_sign.encode(), hashlib.sha256).hexdigest()
+    headers["Authorization"] = (f"AWS4-HMAC-SHA256 Credential={access_key}/{scope}, "
+                                f"SignedHeaders={signed}, Signature={signature}")
+    del headers["host"]
+    req = urllib.request.Request(endpoint + path, data=body if method == "PUT" else None,
+                                 method=method, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=30):
+            pass
+    except urllib.error.HTTPError as e:
+        text = e.read().decode(errors="replace")
+        code = re.search(r"<Code>(.*?)</Code>", text)
+        msg = re.search(r"<Message>(.*?)</Message>", text)
+        detail = ": ".join(x.group(1) for x in (code, msg) if x and x.group(1)) or f"HTTP {e.code}"
+        hint = {"InvalidAccessKeyId": "check CEPH_APT_S3_ACCESS_KEY_ID",
+                "SignatureDoesNotMatch": "check CEPH_APT_S3_SECRET_ACCESS_KEY and CEPH_APT_S3_REGION",
+                "NoSuchBucket": "check the bucket in CEPH_APT_S3_URL",
+                "AccessDenied": "the key has no write access to CEPH_APT_S3_URL"}.get(code and code.group(1))
+        raise Error(f"S3 {method} {s3_url.rstrip('/')}/{key}: {detail}"
+                    + (f" ({hint})" if hint else "")) from None
+    except urllib.error.URLError as e:
+        raise Error(f"S3 {method} {s3_url}: {e.reason}") from None
+
+
+def check_s3(s3_url, access_key, secret_key, region):
+    """Uploads and deletes a small object, so wrong credentials, bucket or
+    permissions fail now and not after hours of building."""
+    key = ".ceph-apt-cloudbuild-check"
+    s3_request("PUT", s3_url, key, access_key, secret_key, region, b"upload check\n")
+    try:
+        s3_request("DELETE", s3_url, key, access_key, secret_key, region)
+    except Error as e:
+        # fetch-incoming moves (deletes) files, so this would fail there, too.
+        raise Error(f"{e}\nuploading works, but deleting does not; "
+                    "fetch-incoming needs delete permission") from None
+
+
+def check_git(url, ref):
+    """The repository is reachable and has the ref, if git is installed."""
+    if not shutil.which("git"):
+        log("git not installed, not checking the repository")
+        return
+    refs = [f"refs/heads/{ref}", f"refs/tags/{ref}"] if ref else ["HEAD"]
+    res = subprocess.run(["git", "ls-remote", "--exit-code", url, *refs], capture_output=True,
+                         text=True, timeout=60, env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
+    if res.returncode == 2:
+        raise Error(f"branch or tag {ref!r} not found in {strip_credentials(url)}, push it first")
+    if res.returncode != 0:
+        raise Error(f"cannot read {strip_credentials(url)}: {res.stderr.strip()}")
 
 
 class HCloud:
@@ -291,6 +373,14 @@ def cmd_build(args, build_opts):
     if not shutil.which("ssh") or not shutil.which("ssh-keygen"):
         raise Error("ssh and ssh-keygen are required")
 
+    # Check everything that can fail cheaply before paying for a server.
+    log("Checking the Hetzner token, repository and S3 upload")
+    if not hc.request("GET", f"/server_types?name={urllib.parse.quote(args.server_type)}")["server_types"]:
+        raise Error(f"unknown Hetzner server type {args.server_type!r}")
+    check_git(git_url, args.ref)
+    check_s3(s3_url, os.environ["CEPH_APT_S3_ACCESS_KEY_ID"],
+             os.environ["CEPH_APT_S3_SECRET_ACCESS_KEY"], os.environ.get("CEPH_APT_S3_REGION"))
+
     name = f"ceph-apt-{args.version.replace('.', '-')}-{args.server_type}-{time.strftime('%Y%m%d-%H%M%S')}"
     workdir = STATE_DIR / name
     workdir.mkdir(parents=True, mode=0o700)
@@ -405,6 +495,10 @@ upload the packages and build logs to S3 and delete the server.
 
 Everything after -- is passed to ./ceph-apt build for every distribution,
 e.g. --rev N, --changelog TEXT, --jobs N or --with-dbg.
+
+Before a server is created, the Hetzner token and server type, the
+repository and --ref, and the S3 upload (a test object that is deleted again)
+are checked, so a wrong setting fails immediately and not after the build.
 
 The server clones the repository from CEPH_APT_GIT_URL, so the patches and
 scripts used are those of the pushed branch (--ref), not of your local
