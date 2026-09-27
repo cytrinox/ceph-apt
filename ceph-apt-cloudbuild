@@ -1,28 +1,8 @@
 #!/usr/bin/env python3
 """ceph-apt-cloudbuild - build Ceph packages on a temporary Hetzner Cloud server.
 
-Creates a server of the given type, clones this repository there, builds the
-requested Ceph version for each distribution with ./ceph-apt, uploads the new
-packages and build logs to S3 and deletes the server again. The packages are
-built for the server's architecture: cax* types build arm64, cpx*/ccx* amd64.
-
-    ./ceph-apt-cloudbuild build cax41 19.2.6 bookworm trixie
-    ./ceph-apt-cloudbuild build ccx43 20.2.4 trixie -- --rev 2
-    ./ceph-apt-cloudbuild cleanup      # delete servers and keys left behind
-
-Environment:
-    CEPH_APT_HCLOUD_TOKEN          Hetzner Cloud API token (read & write), required
-    CEPH_APT_GIT_URL               repository the server clones (default below);
-                                   for a private repository include a read-only token
-    CEPH_APT_S3_URL                upload target (default below), either
-                                   https://<endpoint>/<bucket>[/<prefix>] or
-                                   s3://<bucket>[/<prefix>] for AWS
-    CEPH_APT_S3_ACCESS_KEY_ID      S3 credentials, required
-    CEPH_APT_S3_SECRET_ACCESS_KEY
-    CEPH_APT_S3_REGION             S3 region (optional; derived for Hetzner
-                                   Object Storage endpoints)
-    CEPH_APT_DEBFULLNAME           changelog entry of the packages (optional)
-    CEPH_APT_DEBEMAIL
+Run ./ceph-apt-cloudbuild --help and ./ceph-apt-cloudbuild build --help for
+usage, environment variables and examples.
 
 Only the Python standard library and an OpenSSH client are needed.
 """
@@ -394,6 +374,102 @@ def cmd_cleanup(args, _):
     return 0
 
 
+MAIN_DESCRIPTION = """\
+Build Ceph packages on a temporary Hetzner Cloud server.
+
+For each run a server is created, this repository is cloned there, the Ceph
+version is built for every given distribution with ./ceph-apt, the packages
+and build logs are uploaded to S3 (CEPH_APT_S3_URL) and the server is deleted
+again, also on failure or Ctrl-C. Publishing happens afterwards on the host
+with the signing key:
+
+    ./ceph-apt fetch-incoming    # S3 incoming/ -> REPO_DIR
+    ./ceph-apt publish           # index, sign, upload the repository
+"""
+
+MAIN_EXAMPLES = """
+examples:
+  # Tentacle 20.2.4 for trixie and forky, amd64 and arm64 in parallel
+  ./ceph-apt-cloudbuild build ccx43 20.2.4 trixie forky
+  ./ceph-apt-cloudbuild build cax41 20.2.4 trixie forky
+
+  # delete servers left behind
+  ./ceph-apt-cloudbuild cleanup
+
+  More examples: ./ceph-apt-cloudbuild build --help
+"""
+
+BUILD_DESCRIPTION = """\
+Create a server, build Ceph <version> for each <dist> one after another,
+upload the packages and build logs to S3 and delete the server.
+
+Everything after -- is passed to ./ceph-apt build for every distribution,
+e.g. --rev N, --changelog TEXT, --jobs N or --with-dbg.
+
+The server clones the repository from CEPH_APT_GIT_URL, so the patches and
+scripts used are those of the pushed branch (--ref), not of your local
+checkout. The terminal shows the build steps; the full log is written to
+~/.cache/ceph-apt-cloudbuild/<server name>/build.log.
+"""
+
+SERVER_TYPES_HELP = """
+server types (32 GB RAM or more recommended):
+  cax41   arm64, 16 cores, 32 GB
+  cpx62   amd64, 16 shared cores, 32 GB      about 1 h per distribution
+  ccx43   amd64, 16 dedicated cores, 64 GB
+  ccx63   amd64, 48 dedicated cores, 192 GB  about 20 min per distribution
+  Each distribution is a full build (no ccache from earlier runs), so the
+  run time grows with the number of distributions. Dedicated (ccx) types
+  count against the account's dedicated core limit.
+"""
+
+BUILD_EXAMPLES = """
+examples:
+  # Squid 19.2.6 for bookworm and trixie on amd64
+  ./ceph-apt-cloudbuild build cpx62 19.2.6 bookworm trixie
+
+  # the same for arm64; run it at the same time from a second shell
+  ./ceph-apt-cloudbuild build cax41 19.2.6 bookworm trixie
+
+  # Tentacle 20.2.4 on a fast server in the bucket's location
+  ./ceph-apt-cloudbuild build ccx63 20.2.4 trixie forky --location nbg1
+
+  # build with the patches of a pushed branch instead of the default branch
+  ./ceph-apt-cloudbuild build cpx62 19.2.0 trixie forky --ref my-branch
+
+  # rebuild an already published version with a changelog entry
+  ./ceph-apt-cloudbuild build cpx62 19.2.6 trixie forky -- --rev 2 \\
+      --changelog "Rebuild with the mgr Python 3.13 fix."
+
+  # a new Ceph or Debian release: keep the server when the build fails,
+  # inspect it with the printed ssh command, then delete it
+  ./ceph-apt-cloudbuild build ccx43 20.2.5 forky --keep-on-failure
+  ./ceph-apt-cloudbuild cleanup
+
+  # afterwards, on the host with the signing key
+  ./ceph-apt fetch-incoming && ./ceph-apt publish
+
+  Build amd64 as well as arm64: packages of architecture "all" (Python
+  modules, dashboard, cephadm, ...) are only built on amd64.
+"""
+
+ENVIRONMENT_HELP = f"""
+environment:
+  CEPH_APT_HCLOUD_TOKEN          Hetzner Cloud API token (read & write), required
+  CEPH_APT_S3_ACCESS_KEY_ID      S3 credentials for the upload, required
+  CEPH_APT_S3_SECRET_ACCESS_KEY
+  CEPH_APT_S3_URL                upload target, https://<endpoint>/<bucket>[/<prefix>]
+                                 or s3://<bucket>[/<prefix>]
+                                 (default: {DEFAULT_S3_URL})
+  CEPH_APT_S3_REGION             S3 region (derived for Hetzner Object Storage)
+  CEPH_APT_GIT_URL               repository the server clones; include a read-only
+                                 token for a private repository
+                                 (default: {DEFAULT_GIT_URL})
+  CEPH_APT_DEBFULLNAME           name and email in the changelog entry (optional)
+  CEPH_APT_DEBEMAIL
+"""
+
+
 def main(argv):
     # Everything after "--" is passed to ./ceph-apt build unchanged.
     build_opts = []
@@ -401,25 +477,44 @@ def main(argv):
         i = argv.index("--")
         argv, build_opts = argv[:i], argv[i + 1:]
 
+    fmt = argparse.RawDescriptionHelpFormatter
     parser = argparse.ArgumentParser(
-        description="Build Ceph packages on a temporary Hetzner Cloud server.",
-        epilog="Options after -- are passed to ./ceph-apt build, e.g. -- --rev 2")
-    sub = parser.add_subparsers(dest="command", required=True)
+        formatter_class=fmt,
+        description=MAIN_DESCRIPTION,
+        epilog=ENVIRONMENT_HELP + MAIN_EXAMPLES)
+    sub = parser.add_subparsers(dest="command", required=True, metavar="command")
 
-    b = sub.add_parser("build", help="build on a new server, upload to S3, delete the server")
-    b.add_argument("server_type", help="Hetzner server type, e.g. cax41 (arm64) or ccx43 (amd64)")
-    b.add_argument("version", help="Ceph version, e.g. 19.2.6")
-    b.add_argument("dists", nargs="+", metavar="dist", help="distributions, e.g. bookworm trixie")
-    b.add_argument("--location", help="Hetzner location, e.g. fsn1, nbg1, hel1 (default: chosen by Hetzner)")
-    b.add_argument("--image", default="debian-13", help="server OS image (default: %(default)s)")
-    b.add_argument("--ref", help="branch or tag to clone (default: the repository's default branch)")
+    b = sub.add_parser(
+        "build", formatter_class=fmt,
+        help="build on a new server, upload to S3, delete the server",
+        description=BUILD_DESCRIPTION,
+        epilog=SERVER_TYPES_HELP + BUILD_EXAMPLES + ENVIRONMENT_HELP,
+        usage="%(prog)s [options] server_type version dist [dist ...] [-- ceph-apt build options]")
+    b.add_argument("server_type",
+                   help="Hetzner server type; its architecture decides what is built "
+                        "(cax* = arm64, cpx*/ccx* = amd64)")
+    b.add_argument("version", help="Ceph version, e.g. 19.2.6 or 20.2.4")
+    b.add_argument("dists", nargs="+", metavar="dist",
+                   help="one or more distributions, built one after another: "
+                        "bookworm, trixie, forky, jammy, noble")
+    b.add_argument("--location", help="Hetzner location, e.g. nbg1, fsn1, hel1 "
+                                      "(default: chosen by Hetzner)")
+    b.add_argument("--image", default="debian-13", help="OS image of the server (default: %(default)s)")
+    b.add_argument("--ref", help="branch or tag of the repository to build with "
+                                 "(default: its default branch); push local changes first")
     b.add_argument("--max-hours", type=float, default=12,
-                   help="give up and delete the server after this many hours (default: %(default)s)")
+                   help="give up and delete the server after this many hours (default: %(default)g)")
     b.add_argument("--keep", action="store_true", help="keep the server after the build")
-    b.add_argument("--keep-on-failure", action="store_true", help="keep the server if the build fails")
+    b.add_argument("--keep-on-failure", action="store_true",
+                   help="keep the server if a build fails, to inspect it over SSH")
     b.set_defaults(func=cmd_build)
 
-    c = sub.add_parser("cleanup", help="delete all servers and SSH keys created by this tool")
+    c = sub.add_parser(
+        "cleanup", formatter_class=fmt,
+        help="delete all servers and SSH keys created by this tool",
+        description="Delete all servers and SSH keys labelled managed-by=ceph-apt-cloudbuild,\n"
+                    "e.g. a server kept with --keep-on-failure or left behind when this\n"
+                    "script was killed. Needs CEPH_APT_HCLOUD_TOKEN.")
     c.set_defaults(func=cmd_cleanup)
 
     args = parser.parse_args(argv)
