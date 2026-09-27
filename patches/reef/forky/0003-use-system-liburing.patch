@@ -1,0 +1,25 @@
+Description: Build against the system liburing
+ Squid and reef bundle liburing 0.7, which no longer compiles against the kernel
+ headers in Debian forky (struct open_how). Use Debian's liburing instead;
+ dh_shlibdeps adds the runtime dependency.
+---
+--- a/debian/control
++++ b/debian/control
+@@ -66,6 +66,7 @@
+                libssl-dev,
+                libtool,
+                libudev-dev,
++               liburing-dev,
+                libnl-genl-3-dev,
+                libxml2-dev,
+                librabbitmq-dev,
+--- a/debian/rules
++++ b/debian/rules
+@@ -24,6 +24,7 @@
+ 
+ extraopts += -DWITH_JAEGER=ON
+ extraopts += -DWITH_SYSTEM_UTF8PROC=ON
++extraopts += -DWITH_SYSTEM_LIBURING=ON
+ extraopts += -DWITH_OCF=ON -DWITH_LTTNG=ON
+ extraopts += -DWITH_MGR_DASHBOARD_FRONTEND=OFF
+ extraopts += -DWITH_PYTHON3=3

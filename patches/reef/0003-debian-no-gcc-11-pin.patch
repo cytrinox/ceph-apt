@@ -1,0 +1,31 @@
+Description: debian: Build-Depend on g++ 11 or greater (backport of d79aabf8f89c)
+ Reef 18.2.0 hard-codes gcc-11/g++-11 in debian/rules, which neither
+ Debian bookworm, trixie nor forky provides, so CMake fails with "The
+ CMAKE_CXX_COMPILER: g++-11 is not a full path and was not found in the
+ PATH". Backport of upstream commit d79aabf8f89c (in 18.2.1), which uses
+ the default compiler and Build-Depends on g++ (>= 11) instead.
+ https://tracker.ceph.com/issues/61845
+Ceph-Version: < 18.2.1
+---
+--- a/debian/control
++++ b/debian/control
+@@ -20,8 +20,7 @@ Build-Depends: automake,
+                git,
+                golang,
+                gperf,
+-               g++ (>= 7),
+-               hostname <pkg.ceph.check>,
++               g++ (>= 11),
+                javahelper,
+                jq <pkg.ceph.check>,
+                jsonnet <pkg.ceph.check>,
+--- a/debian/rules
++++ b/debian/rules
+@@ -5,7 +5,6 @@ export DESTDIR=$(CURDIR)/debian/tmp
+ 
+ include /usr/share/dpkg/default.mk
+ 
+-extraopts += -DCMAKE_C_COMPILER=gcc-11 -DCMAKE_CXX_COMPILER=g++-11
+ ifneq (,$(findstring WITH_STATIC_LIBSTDCXX,$(CEPH_EXTRA_CMAKE_ARGS)))
+   # dh_auto_build sets LDFLAGS with `dpkg-buildflags --get LDFLAGS` on ubuntu,
+   # which makes the application aborts when the shared library throws

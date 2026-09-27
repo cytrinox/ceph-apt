@@ -1,0 +1,20 @@
+Description: build: use the bundled fmt unless WITH_SYSTEM_FMT is set
+ Reef builds against the system fmt whenever it is new enough. fmt 10 and
+ later (Debian trixie and forky) no longer format types like ceph_le<>
+ implicitly, so e.g. src/msg/async/frames_v2.cc fails with "Cannot format
+ an argument". Squid uses its bundled fmt by default and the system one
+ only with WITH_SYSTEM_FMT (upstream 421bf61fee35 and follow-ups); do the
+ same for reef. The bundled fmt is 9.1.
+---
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -325,3 +325,8 @@
+   STRING "build with fmt version")
+-find_package(fmt ${WITH_FMT_VERSION} QUIET)
++# Like squid: use the bundled fmt unless the system one is asked for; fmt 10
++# and later (Debian trixie, forky) cannot format ceph_le<> and friends.
++option(WITH_SYSTEM_FMT "build against system fmt" OFF)
++if(WITH_SYSTEM_FMT)
++  find_package(fmt ${WITH_FMT_VERSION} QUIET)
++endif()
+ if(fmt_FOUND)

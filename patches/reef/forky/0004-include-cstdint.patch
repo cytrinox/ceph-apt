@@ -1,0 +1,18 @@
+Description: Force-include <cstdint> for GCC 16
+ GCC 16 in Debian forky no longer includes <cstdint> indirectly through other
+ standard headers. Ceph's own sources (e.g. src/common/Formatter.h) rely on
+ that in many places, so include it in every C++ translation unit.
+---
+--- a/debian/rules
++++ b/debian/rules
+@@ -3,6 +3,10 @@
+ export DH_VERBOSE=1
+ export DESTDIR=$(CURDIR)/debian/tmp
+ 
++# GCC 16 no longer includes <cstdint> indirectly through other standard
++# headers, and many Ceph and bundled sources rely on that.
++export DEB_CXXFLAGS_MAINT_APPEND = -include cstdint
++
+ include /usr/share/dpkg/default.mk
+ 
+ ifneq (,$(findstring WITH_STATIC_LIBSTDCXX,$(CEPH_EXTRA_CMAKE_ARGS)))

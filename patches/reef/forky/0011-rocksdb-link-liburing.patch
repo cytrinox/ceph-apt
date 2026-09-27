@@ -1,0 +1,70 @@
+Description: cmake: pass liburing down to the rocksdb build (backport of 35ee17a2135d, 8addb3598701)
+ With liburing-dev installed (see 0003-use-system-liburing.patch) the bundled
+ rocksdb detects and uses io_uring, but Ceph does not link liburing into the
+ programs using it: "undefined reference to `__io_uring_get_cqe'".
+ Backport of two upstream commits that are in reef 18.2.4:
+  - 35ee17a2135d cmake: promote uring package search to top-level
+    (so uring::uring is visible where rocksdb is configured)
+  - 8addb3598701 cmake: populate liburing include and library paths down
+    to rocksdb external project
+Ceph-Version: < 18.2.4
+---
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -247,6 +247,15 @@ set(HAVE_LIBURING ${WITH_LIBURING})
+ CMAKE_DEPENDENT_OPTION(WITH_SYSTEM_LIBURING "Require and build with system liburing" OFF
+   "HAVE_LIBAIO;WITH_BLUESTORE" OFF)
+ 
++if(WITH_LIBURING)
++  if(WITH_SYSTEM_LIBURING)
++    find_package(uring REQUIRED)
++  else()
++    include(Builduring)
++    build_uring()
++  endif()
++endif()
++
+ CMAKE_DEPENDENT_OPTION(WITH_BLUESTORE_PMEM "Enable PMDK libraries" OFF
+   "WITH_BLUESTORE" OFF)
+ if(WITH_BLUESTORE_PMEM)
+--- a/src/blk/CMakeLists.txt
++++ b/src/blk/CMakeLists.txt
+@@ -57,11 +57,5 @@ if(WITH_EVENTTRACE)
+ endif()
+ 
+ if(WITH_LIBURING)
+-  if(WITH_SYSTEM_LIBURING)
+-    find_package(uring REQUIRED)
+-  else()
+-    include(Builduring)
+-    build_uring()
+-  endif()
+   target_link_libraries(blk PRIVATE uring::uring)
+ endif()
+--- a/cmake/modules/BuildRocksDB.cmake
++++ b/cmake/modules/BuildRocksDB.cmake
+@@ -11,6 +11,13 @@ function(build_rocksdb)
+          -DCMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE})
+   endif()
+ 
++  list(APPEND rocksdb_CMAKE_ARGS -DWITH_LIBURING=${WITH_LIBURING})
++  if(WITH_LIBURING)
++    list(APPEND rocksdb_CMAKE_ARGS -During_INCLUDE_DIR=${URING_INCLUDE_DIR})
++    list(APPEND rocksdb_CMAKE_ARGS -During_LIBRARIES=${URING_LIBRARY_DIR})
++    list(APPEND rocksdb_INTERFACE_LINK_LIBRARIES uring::uring)
++  endif()
++
+   if(ALLOCATOR STREQUAL "jemalloc")
+     list(APPEND rocksdb_CMAKE_ARGS -DWITH_JEMALLOC=ON)
+     list(APPEND rocksdb_INTERFACE_LINK_LIBRARIES JeMalloc::JeMalloc)
+--- a/cmake/modules/Builduring.cmake
++++ b/cmake/modules/Builduring.cmake
+@@ -32,6 +32,8 @@ function(build_uring)
+   ExternalProject_Get_Property(liburing_ext source_dir)
+   set(URING_INCLUDE_DIR "${source_dir}/src/include")
+   set(URING_LIBRARY_DIR "${source_dir}/src")
++  set(URING_INCLUDE_DIR ${URING_INCLUDE_DIR} PARENT_SCOPE)
++  set(URING_LIBRARY_DIR ${URING_LIBRARY_DIR} PARENT_SCOPE)
+ 
+   add_library(uring::uring STATIC IMPORTED GLOBAL)
+   add_dependencies(uring::uring liburing_ext)
