@@ -98,24 +98,59 @@ strip_dbg_packages() {
     perl -pi -e 's/--dbg-package.*//' "$srcdir/debian/rules"
 }
 
+# The optional "Ceph-Version:" line in a patch header (before the first "---").
+patch_version_spec() {
+    awk '/^---/ { exit } sub(/^Ceph-Version:[ \t]*/, "") { print; exit }' "$1"
+}
+
+# version_matches <version> <spec> <patch>: every comma-separated condition
+# of <spec> (e.g. ">= 20.2.0, < 20.2.5" or "= 20.2.3") holds for <version>.
+version_matches() {
+    local version=$1 spec=$2 patch=$3 cond op ver
+    local IFS=,
+    for cond in $spec; do
+        cond=${cond//[[:space:]]/}
+        [ -n "$cond" ] || continue
+        op=${cond%%[0-9]*}
+        ver=${cond#"$op"}
+        case "$op" in
+            '<') op=lt ;;
+            '<=') op=le ;;
+            '='|'==') op=eq ;;
+            '>=') op=ge ;;
+            '>') op=gt ;;
+            *) die "invalid Ceph-Version condition '$cond' in $patch" ;;
+        esac
+        [[ "$ver" =~ ^[0-9]+(\.[0-9]+)*$ ]] || die "invalid Ceph-Version condition '$cond' in $patch"
+        dpkg --compare-versions "$version" "$op" "$ver" || return 1
+    done
+}
+
 apply_patches() {
-    local srcdir=$1 release=$2 codename=$3 dir p
+    local srcdir=$1 release=$2 codename=$3 version=$4 dir p name spec
     for dir in "$PATCH_DIR/$release" "$PATCH_DIR/$release/$codename"; do
         for p in "$dir"/*.patch; do
             [ -e "$p" ] || continue
-            log "Applying ${p#"$PATCH_DIR"/}"
+            name=${p#"$PATCH_DIR"/}
+            spec=$(patch_version_spec "$p")
+            if [ -n "$spec" ] && ! version_matches "$version" "$spec" "$name"; then
+                log "Skipping $name (Ceph-Version: $spec)"
+                continue
+            fi
+            log "Applying $name${spec:+ (Ceph-Version: $spec)}"
             patch -d "$srcdir" -p1 --forward --batch < "$p"
         done
     done
 }
 
+# apt-get build-dep names the package that can't be installed, unlike
+# mk-build-deps, which only reports that the dependency package failed.
 install_build_deps() {
-    local builddir=$1 srcdir=$2
+    local srcdir=$1 profiles=()
     log "Installing build dependencies"
     apt-get update
-    mkdir -p "$builddir/deps"
-    (cd "$builddir/deps" && mk-build-deps --install --remove \
-        --tool 'apt-get -y --no-install-recommends' "$srcdir/debian/control")
+    [ -z "${DEB_BUILD_PROFILES:-}" ] || profiles=(-P "${DEB_BUILD_PROFILES// /,}")
+    apt-get build-dep -y --no-install-recommends "${profiles[@]}" "$srcdir"
 }
 
 # Owner of new files: whoever owns the repository root. Matters for rootful
@@ -153,7 +188,7 @@ cmd_build() {
 
     local codename tag arch debver pooldir builddir srcdir mode
     codename=$(distro_codename)
-    tag=$(distro_tag)
+    tag=$(distro_tag) || die "no version number known for $codename, add it to debian_version() in lib/releases.sh"
     arch=$(dpkg --print-architecture)
     debver="$version-1~${tag}u${rev}"
     pooldir="$REPO/$release/pool/$codename/main/c/ceph"
@@ -184,7 +219,7 @@ cmd_build() {
     # On failure the build tree is left in place for inspection.
 
     [ "$with_dbg" = 1 ] || strip_dbg_packages "$srcdir"
-    apply_patches "$srcdir" "$release" "$codename"
+    apply_patches "$srcdir" "$release" "$codename" "$version"
 
     (cd "$srcdir" && \
         DEBFULLNAME="${DEBFULLNAME:-ceph-apt}" DEBEMAIL="${DEBEMAIL:-ceph-apt@localhost}" \
@@ -192,7 +227,7 @@ cmd_build() {
             --distribution "$codename" --force-distribution \
             "Rebuild of upstream Ceph $version for $codename.")
 
-    install_build_deps "$builddir" "$srcdir"
+    install_build_deps "$srcdir"
 
     if [ "$prepare_only" = 1 ]; then
         log "Prepared $srcdir (--prepare-only), not building"
@@ -203,6 +238,10 @@ cmd_build() {
     local opts="nocheck parallel=$jobs"
     [ "$with_dbg" = 1 ] || opts="$opts noautodbgsym"
     export DEB_BUILD_OPTIONS="$opts${DEB_BUILD_OPTIONS:+ $DEB_BUILD_OPTIONS}"
+    # CMake 4 (forky and later) rejects cmake_minimum_required() < 3.5, which
+    # bundled libraries like zstd still use. The variable is inherited by
+    # their nested CMake runs; CMake 3.x ignores it.
+    export CMAKE_POLICY_VERSION_MINIMUM=${CMAKE_POLICY_VERSION_MINIMUM:-3.5}
     if [ -d /ccache ] && [ -w /ccache ]; then
         export CCACHE_DIR=/ccache CCACHE_BASEDIR="$WORK/build" CCACHE_NOHASHDIR=true
         export CCACHE_MAXSIZE=${CCACHE_MAXSIZE:-30G}

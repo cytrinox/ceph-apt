@@ -1,0 +1,16 @@
+Description: arrow: don't use re2::StringPiece::as_string()
+ The re2 in Debian forky defines re2::StringPiece as std::string_view,
+ which has no as_string() member. Construct the std::string explicitly,
+ which works with old and new re2.
+---
+--- a/src/arrow/cpp/src/arrow/compute/kernels/scalar_string.cc
++++ b/src/arrow/cpp/src/arrow/compute/kernels/scalar_string.cc
+@@ -3012,7 +3012,7 @@
+         result->value.reserve(group_count);
+         for (int i = 0; i < group_count; i++) {
+           result->value.push_back(
+-              std::make_shared<ScalarType>(found_values[i].as_string()));
++              std::make_shared<ScalarType>(std::string(found_values[i])));
+         }
+         result->is_valid = true;
+       } else {

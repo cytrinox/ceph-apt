@@ -1,0 +1,16 @@
+Description: Build against FUSE 3
+ Debian forky no longer ships libfuse-dev (FUSE 2). Ceph's CMake already
+ prefers fuse3 when it is available, so only the build dependency changes.
+ The runtime dependency on "fuse" is satisfied by fuse3 on forky.
+---
+--- a/debian/control
++++ b/debian/control
+@@ -43,7 +43,7 @@
+                libexpat1-dev,
+                libffi-dev [!amd64] <pkg.ceph.check>,
+                libfmt-dev (>= 6.1.2),
+-               libfuse-dev,
++               libfuse3-dev,
+                libgoogle-perftools-dev [i386 amd64 arm64],
+                libgnutls28-dev <pkg.ceph.crimson>,
+                libhwloc-dev <pkg.ceph.crimson>,

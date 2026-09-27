@@ -1,0 +1,832 @@
+Description: Declare crimson::make_message only in crimson builds
+ Every message class befriends both ceph::make_message and
+ crimson::make_message. GCC 16 finds the crimson friend through
+ argument-dependent lookup, so unqualified make_message<T>(msg, ...) calls
+ in the classic code (e.g. src/mds/Server.cc) become ambiguous with
+ ceph::make_message, which is visible through "using namespace ceph".
+ crimson::make_message is only used by the crimson OSD, so declare it and
+ the friend declarations only when WITH_CRIMSON is set.
+---
+--- a/src/messages/MCacheExpire.h
++++ b/src/messages/MCacheExpire.h
+@@ -105,8 +105,10 @@
+ private:
+   template<class T, typename... Args>
+   friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
++#ifdef WITH_CRIMSON
+   template<class T, typename... Args>
+   friend MURef<T> crimson::make_message(Args&&... args);
++#endif
+ };
+ 
+ WRITE_CLASS_ENCODER(MCacheExpire::realm)
+--- a/src/messages/MClientCapRelease.h
++++ b/src/messages/MClientCapRelease.h
+@@ -52,8 +52,10 @@
+ private:
+   template<class T, typename... Args>
+   friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
++#ifdef WITH_CRIMSON
+   template<class T, typename... Args>
+   friend MURef<T> crimson::make_message(Args&&... args);
++#endif
+ 
+   static constexpr int HEAD_VERSION = 2;
+   static constexpr int COMPAT_VERSION = 1;
+--- a/src/messages/MClientCaps.h
++++ b/src/messages/MClientCaps.h
+@@ -353,8 +353,10 @@
+ private:
+   template<class T, typename... Args>
+   friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
++#ifdef WITH_CRIMSON
+   template<class T, typename... Args>
+   friend MURef<T> crimson::make_message(Args&&... args);
++#endif
+ };
+ 
+ #endif
+--- a/src/messages/MClientLease.h
++++ b/src/messages/MClientLease.h
+@@ -90,8 +90,10 @@
+ private:
+   template<class T, typename... Args>
+   friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
++#ifdef WITH_CRIMSON
+   template<class T, typename... Args>
+   friend MURef<T> crimson::make_message(Args&&... args);
++#endif
+ };
+ 
+ #endif
+--- a/src/messages/MClientMetrics.h
++++ b/src/messages/MClientMetrics.h
+@@ -54,8 +54,10 @@
+ private:
+   template<class T, typename... Args>
+   friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
++#ifdef WITH_CRIMSON
+   template<class T, typename... Args>
+   friend MURef<T> crimson::make_message(Args&&... args);
++#endif
+ };
+ 
+ #endif // CEPH_MDS_CLIENT_METRICS_H
+--- a/src/messages/MClientQuota.h
++++ b/src/messages/MClientQuota.h
+@@ -49,8 +49,10 @@
+ private:
+   template<class T, typename... Args>
+   friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
++#ifdef WITH_CRIMSON
+   template<class T, typename... Args>
+   friend MURef<T> crimson::make_message(Args&&... args);
++#endif
+ };
+ 
+ #endif
+--- a/src/messages/MClientReclaim.h
++++ b/src/messages/MClientReclaim.h
+@@ -61,8 +61,10 @@
+ 
+   template<class T, typename... Args>
+   friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
++#ifdef WITH_CRIMSON
+   template<class T, typename... Args>
+   friend MURef<T> crimson::make_message(Args&&... args);
++#endif
+ };
+ 
+ #endif
+--- a/src/messages/MClientReclaimReply.h
++++ b/src/messages/MClientReclaimReply.h
+@@ -67,8 +67,10 @@
+ 
+   template<class T, typename... Args>
+   friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
++#ifdef WITH_CRIMSON
+   template<class T, typename... Args>
+   friend MURef<T> crimson::make_message(Args&&... args);
++#endif
+ };
+ 
+ #endif
+--- a/src/messages/MClientReconnect.h
++++ b/src/messages/MClientReconnect.h
+@@ -170,8 +170,10 @@
+ private:
+   template<class T, typename... Args>
+   friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
++#ifdef WITH_CRIMSON
+   template<class T, typename... Args>
+   friend MURef<T> crimson::make_message(Args&&... args);
++#endif
+ };
+ 
+ 
+--- a/src/messages/MClientReply.h
++++ b/src/messages/MClientReply.h
+@@ -451,8 +451,10 @@
+ private:
+   template<class T, typename... Args>
+   friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
++#ifdef WITH_CRIMSON
+   template<class T, typename... Args>
+   friend MURef<T> crimson::make_message(Args&&... args);
++#endif
+ };
+ 
+ #endif
+--- a/src/messages/MClientRequestForward.h
++++ b/src/messages/MClientRequestForward.h
+@@ -67,8 +67,10 @@
+ private:
+   template<class T, typename... Args>
+   friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
++#ifdef WITH_CRIMSON
+   template<class T, typename... Args>
+   friend MURef<T> crimson::make_message(Args&&... args);
++#endif
+ };
+ 
+ #endif
+--- a/src/messages/MClientRequest.h
++++ b/src/messages/MClientRequest.h
+@@ -397,8 +397,10 @@
+ private:
+   template<class T, typename... Args>
+   friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
++#ifdef WITH_CRIMSON
+   template<class T, typename... Args>
+   friend MURef<T> crimson::make_message(Args&&... args);
++#endif
+ };
+ 
+ WRITE_CLASS_ENCODER(MClientRequest::Release)
+--- a/src/messages/MClientSession.h
++++ b/src/messages/MClientSession.h
+@@ -114,8 +114,10 @@
+ private:
+   template<class T, typename... Args>
+   friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
++#ifdef WITH_CRIMSON
+   template<class T, typename... Args>
+   friend MURef<T> crimson::make_message(Args&&... args);
++#endif
+ };
+ 
+ #endif
+--- a/src/messages/MClientSnap.h
++++ b/src/messages/MClientSnap.h
+@@ -66,8 +66,10 @@
+ private:
+   template<class T, typename... Args>
+   friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
++#ifdef WITH_CRIMSON
+   template<class T, typename... Args>
+   friend MURef<T> crimson::make_message(Args&&... args);
++#endif
+ };
+ 
+ #endif
+--- a/src/messages/MDentryLink.h
++++ b/src/messages/MDentryLink.h
+@@ -75,8 +75,10 @@
+ private:
+   template<class T, typename... Args>
+   friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
++#ifdef WITH_CRIMSON
+   template<class T, typename... Args>
+   friend MURef<T> crimson::make_message(Args&&... args);
++#endif
+ };
+ 
+ #endif
+--- a/src/messages/MDentryUnlink.h
++++ b/src/messages/MDentryUnlink.h
+@@ -66,8 +66,10 @@
+ private:
+   template<class T, typename... Args>
+   friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
++#ifdef WITH_CRIMSON
+   template<class T, typename... Args>
+   friend MURef<T> crimson::make_message(Args&&... args);
++#endif
+ };
+ 
+ #endif
+--- a/src/messages/MDirUpdate.h
++++ b/src/messages/MDirUpdate.h
+@@ -93,8 +93,10 @@
+   static constexpr int COMPAT_VERSION = 1;
+   template<class T, typename... Args>
+   friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
++#ifdef WITH_CRIMSON
+   template<class T, typename... Args>
+   friend MURef<T> crimson::make_message(Args&&... args);
++#endif
+ };
+ 
+ #endif
+--- a/src/messages/MDiscover.h
++++ b/src/messages/MDiscover.h
+@@ -95,8 +95,10 @@
+ private:
+   template<class T, typename... Args>
+   friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
++#ifdef WITH_CRIMSON
+   template<class T, typename... Args>
+   friend MURef<T> crimson::make_message(Args&&... args);
++#endif
+ };
+ 
+ #endif
+--- a/src/messages/MDiscoverReply.h
++++ b/src/messages/MDiscoverReply.h
+@@ -210,8 +210,10 @@
+ private:
+   template<class T, typename... Args>
+   friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
++#ifdef WITH_CRIMSON
+   template<class T, typename... Args>
+   friend MURef<T> crimson::make_message(Args&&... args);
++#endif
+ };
+ 
+ #endif
+--- a/src/messages/MExportCapsAck.h
++++ b/src/messages/MExportCapsAck.h
+@@ -53,8 +53,10 @@
+ private:
+   template<class T, typename... Args>
+   friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
++#ifdef WITH_CRIMSON
+   template<class T, typename... Args>
+   friend MURef<T> crimson::make_message(Args&&... args);
++#endif
+ };
+ 
+ #endif
+--- a/src/messages/MExportCaps.h
++++ b/src/messages/MExportCaps.h
+@@ -59,8 +59,10 @@
+ private:
+   template<class T, typename... Args>
+   friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
++#ifdef WITH_CRIMSON
+   template<class T, typename... Args>
+   friend MURef<T> crimson::make_message(Args&&... args);
++#endif
+ };
+ 
+ #endif
+--- a/src/messages/MExportDirAck.h
++++ b/src/messages/MExportDirAck.h
+@@ -53,8 +53,10 @@
+ private:
+   template<class T, typename... Args>
+   friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
++#ifdef WITH_CRIMSON
+   template<class T, typename... Args>
+   friend MURef<T> crimson::make_message(Args&&... args);
++#endif
+ };
+ 
+ #endif
+--- a/src/messages/MExportDirCancel.h
++++ b/src/messages/MExportDirCancel.h
+@@ -53,8 +53,10 @@
+ private:
+   template<class T, typename... Args>
+   friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
++#ifdef WITH_CRIMSON
+   template<class T, typename... Args>
+   friend MURef<T> crimson::make_message(Args&&... args);
++#endif
+ };
+ 
+ #endif
+--- a/src/messages/MExportDirDiscoverAck.h
++++ b/src/messages/MExportDirDiscoverAck.h
+@@ -64,8 +64,10 @@
+ private:
+   template<class T, typename... Args>
+   friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
++#ifdef WITH_CRIMSON
+   template<class T, typename... Args>
+   friend MURef<T> crimson::make_message(Args&&... args);
++#endif
+ };
+ 
+ #endif
+--- a/src/messages/MExportDirDiscover.h
++++ b/src/messages/MExportDirDiscover.h
+@@ -68,8 +68,10 @@
+ private:
+   template<class T, typename... Args>
+   friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
++#ifdef WITH_CRIMSON
+   template<class T, typename... Args>
+   friend MURef<T> crimson::make_message(Args&&... args);
++#endif
+ };
+ 
+ #endif
+--- a/src/messages/MExportDirFinish.h
++++ b/src/messages/MExportDirFinish.h
+@@ -58,8 +58,10 @@
+ private:
+   template<class T, typename... Args>
+   friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
++#ifdef WITH_CRIMSON
+   template<class T, typename... Args>
+   friend MURef<T> crimson::make_message(Args&&... args);
++#endif
+ };
+ 
+ #endif
+--- a/src/messages/MExportDir.h
++++ b/src/messages/MExportDir.h
+@@ -61,8 +61,10 @@
+ private:
+   template<class T, typename... Args>
+   friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
++#ifdef WITH_CRIMSON
+   template<class T, typename... Args>
+   friend MURef<T> crimson::make_message(Args&&... args);
++#endif
+ };
+ 
+ #endif
+--- a/src/messages/MExportDirNotifyAck.h
++++ b/src/messages/MExportDirNotifyAck.h
+@@ -58,8 +58,10 @@
+ private:
+   template<class T, typename... Args>
+   friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
++#ifdef WITH_CRIMSON
+   template<class T, typename... Args>
+   friend MURef<T> crimson::make_message(Args&&... args);
++#endif
+ };
+ 
+ #endif
+--- a/src/messages/MExportDirNotify.h
++++ b/src/messages/MExportDirNotify.h
+@@ -85,8 +85,10 @@
+ private:
+   template<class T, typename... Args>
+   friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
++#ifdef WITH_CRIMSON
+   template<class T, typename... Args>
+   friend MURef<T> crimson::make_message(Args&&... args);
++#endif
+ };
+ 
+ #endif
+--- a/src/messages/MExportDirPrepAck.h
++++ b/src/messages/MExportDirPrepAck.h
+@@ -59,8 +59,10 @@
+ private:
+   template<class T, typename... Args>
+   friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
++#ifdef WITH_CRIMSON
+   template<class T, typename... Args>
+   friend MURef<T> crimson::make_message(Args&&... args);
++#endif
+ };
+ 
+ #endif
+--- a/src/messages/MExportDirPrep.h
++++ b/src/messages/MExportDirPrep.h
+@@ -88,8 +88,10 @@
+ private:
+   template<class T, typename... Args>
+   friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
++#ifdef WITH_CRIMSON
+   template<class T, typename... Args>
+   friend MURef<T> crimson::make_message(Args&&... args);
++#endif
+ };
+ 
+ #endif
+--- a/src/messages/MGatherCaps.h
++++ b/src/messages/MGatherCaps.h
+@@ -34,8 +34,10 @@
+ private:
+   template<class T, typename... Args>
+   friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
++#ifdef WITH_CRIMSON
+   template<class T, typename... Args>
+   friend MURef<T> crimson::make_message(Args&&... args);
++#endif
+ };
+ 
+ #endif
+--- a/src/messages/MHeartbeat.h
++++ b/src/messages/MHeartbeat.h
+@@ -61,8 +61,10 @@
+ private:
+   template<class T, typename... Args>
+   friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
++#ifdef WITH_CRIMSON
+   template<class T, typename... Args>
+   friend MURef<T> crimson::make_message(Args&&... args);
++#endif
+ };
+ 
+ #endif
+--- a/src/messages/MInodeFileCaps.h
++++ b/src/messages/MInodeFileCaps.h
+@@ -58,8 +58,10 @@
+ private:
+   template<class T, typename... Args>
+   friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
++#ifdef WITH_CRIMSON
+   template<class T, typename... Args>
+   friend MURef<T> crimson::make_message(Args&&... args);
++#endif
+ };
+ 
+ #endif
+--- a/src/messages/MLock.h
++++ b/src/messages/MLock.h
+@@ -101,8 +101,10 @@
+ private:
+   template<class T, typename... Args>
+   friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
++#ifdef WITH_CRIMSON
+   template<class T, typename... Args>
+   friend MURef<T> crimson::make_message(Args&&... args);
++#endif
+ };
+ 
+ #endif
+--- a/src/messages/MMDSBeacon.h
++++ b/src/messages/MMDSBeacon.h
+@@ -329,8 +329,10 @@
+ private:
+   template<class T, typename... Args>
+   friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
++#ifdef WITH_CRIMSON
+   template<class T, typename... Args>
+   friend MURef<T> crimson::make_message(Args&&... args);
++#endif
+ };
+ 
+ #endif
+--- a/src/messages/MMDSCacheRejoin.h
++++ b/src/messages/MMDSCacheRejoin.h
+@@ -375,8 +375,10 @@
+ private:
+   template<class T, typename... Args>
+   friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
++#ifdef WITH_CRIMSON
+   template<class T, typename... Args>
+   friend MURef<T> crimson::make_message(Args&&... args);
++#endif
+ 
+   static constexpr int HEAD_VERSION = 2;
+   static constexpr int COMPAT_VERSION = 1;
+--- a/src/messages/MMDSFindIno.h
++++ b/src/messages/MMDSFindIno.h
+@@ -50,8 +50,10 @@
+ private:
+   template<class T, typename... Args>
+   friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
++#ifdef WITH_CRIMSON
+   template<class T, typename... Args>
+   friend MURef<T> crimson::make_message(Args&&... args);
++#endif
+ };
+ 
+ #endif
+--- a/src/messages/MMDSFindInoReply.h
++++ b/src/messages/MMDSFindInoReply.h
+@@ -50,8 +50,10 @@
+ private:
+   template<class T, typename... Args>
+   friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
++#ifdef WITH_CRIMSON
+   template<class T, typename... Args>
+   friend MURef<T> crimson::make_message(Args&&... args);
++#endif
+ };
+ 
+ #endif
+--- a/src/messages/MMDSFragmentNotifyAck.h
++++ b/src/messages/MMDSFragmentNotifyAck.h
+@@ -57,8 +57,10 @@
+ private:
+   template<class T, typename... Args>
+   friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
++#ifdef WITH_CRIMSON
+   template<class T, typename... Args>
+   friend MURef<T> crimson::make_message(Args&&... args);
++#endif
+ };
+ 
+ #endif
+--- a/src/messages/MMDSFragmentNotify.h
++++ b/src/messages/MMDSFragmentNotify.h
+@@ -71,8 +71,10 @@
+ private:
+   template<class T, typename... Args>
+   friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
++#ifdef WITH_CRIMSON
+   template<class T, typename... Args>
+   friend MURef<T> crimson::make_message(Args&&... args);  
++#endif
+ };
+ 
+ #endif
+--- a/src/messages/MMDSLoadTargets.h
++++ b/src/messages/MMDSLoadTargets.h
+@@ -58,8 +58,10 @@
+ private:
+   template<class T, typename... Args>
+   friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
++#ifdef WITH_CRIMSON
+   template<class T, typename... Args>
+   friend MURef<T> crimson::make_message(Args&&... args);
++#endif
+ };
+ 
+ #endif
+--- a/src/messages/MMDSMap.h
++++ b/src/messages/MMDSMap.h
+@@ -85,8 +85,10 @@
+ private:
+   template<class T, typename... Args>
+   friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
++#ifdef WITH_CRIMSON
+   template<class T, typename... Args>
+   friend MURef<T> crimson::make_message(Args&&... args);
++#endif
+ };
+ 
+ #endif
+--- a/src/messages/MMDSMetrics.h
++++ b/src/messages/MMDSMetrics.h
+@@ -48,8 +48,10 @@
+ private:
+   template<class T, typename... Args>
+   friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
++#ifdef WITH_CRIMSON
+   template<class T, typename... Args>
+   friend MURef<T> crimson::make_message(Args&&... args);
++#endif
+ };
+ 
+ #endif // CEPH_MDS_METRICS_H
+--- a/src/messages/MMDSOpenIno.h
++++ b/src/messages/MMDSOpenIno.h
+@@ -54,8 +54,10 @@
+ private:
+   template<class T, typename... Args>
+   friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
++#ifdef WITH_CRIMSON
+   template<class T, typename... Args>
+   friend MURef<T> crimson::make_message(Args&&... args);
++#endif
+ };
+ 
+ #endif
+--- a/src/messages/MMDSOpenInoReply.h
++++ b/src/messages/MMDSOpenInoReply.h
+@@ -59,8 +59,10 @@
+ private:
+   template<class T, typename... Args>
+   friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
++#ifdef WITH_CRIMSON
+   template<class T, typename... Args>
+   friend MURef<T> crimson::make_message(Args&&... args);
++#endif
+ };
+ 
+ #endif
+--- a/src/messages/MMDSPeerRequest.h
++++ b/src/messages/MMDSPeerRequest.h
+@@ -228,8 +228,10 @@
+ private:
+   template<class T, typename... Args>
+   friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
++#ifdef WITH_CRIMSON
+   template<class T, typename... Args>
+   friend MURef<T> crimson::make_message(Args&&... args);
++#endif
+ };
+ 
+ #endif
+--- a/src/messages/MMDSPing.h
++++ b/src/messages/MMDSPing.h
+@@ -45,8 +45,10 @@
+ private:
+   template<class T, typename... Args>
+   friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
++#ifdef WITH_CRIMSON
+   template<class T, typename... Args>
+   friend MURef<T> crimson::make_message(Args&&... args);
++#endif
+ };
+ 
+ #endif // CEPH_MESSAGES_MMDSPING_H
+--- a/src/messages/MMDSQuiesceDbAck.h
++++ b/src/messages/MMDSQuiesceDbAck.h
+@@ -51,8 +51,10 @@
+ private:
+   template<class T, typename... Args>
+   friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
++#ifdef WITH_CRIMSON
+   template<class T, typename... Args>
+   friend MURef<T> crimson::make_message(Args&&... args);
++#endif
+ 
+   QuiesceDbPeerAck ack;
+ };
+--- a/src/messages/MMDSQuiesceDbListing.h
++++ b/src/messages/MMDSQuiesceDbListing.h
+@@ -50,8 +50,10 @@
+ private:
+   template<class T, typename... Args>
+   friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
++#ifdef WITH_CRIMSON
+   template<class T, typename... Args>
+   friend MURef<T> crimson::make_message(Args&&... args);
++#endif
+ 
+   QuiesceDbPeerListing peer_listing;
+ };
+--- a/src/messages/MMDSResolveAck.h
++++ b/src/messages/MMDSResolveAck.h
+@@ -60,8 +60,10 @@
+ private:
+   template<class T, typename... Args>
+   friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
++#ifdef WITH_CRIMSON
+   template<class T, typename... Args>
+   friend MURef<T> crimson::make_message(Args&&... args);
++#endif
+ };
+ 
+ #endif
+--- a/src/messages/MMDSResolve.h
++++ b/src/messages/MMDSResolve.h
+@@ -148,8 +148,10 @@
+ private:
+   template<class T, typename... Args>
+   friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
++#ifdef WITH_CRIMSON
+   template<class T, typename... Args>
+   friend MURef<T> crimson::make_message(Args&&... args);
++#endif
+ };
+ 
+ inline std::ostream& operator<<(std::ostream& out, const MMDSResolve::peer_request&) {
+--- a/src/messages/MMDSScrub.h
++++ b/src/messages/MMDSScrub.h
+@@ -122,8 +122,10 @@
+ private:
+   template<class T, typename... Args>
+   friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
++#ifdef WITH_CRIMSON
+   template<class T, typename... Args>
+   friend MURef<T> crimson::make_message(Args&&... args);
++#endif
+ 
+   static constexpr unsigned FLAG_INTERNAL_TAG	= 1<<0;
+   static constexpr unsigned FLAG_FORCE		= 1<<1;
+--- a/src/messages/MMDSScrubStats.h
++++ b/src/messages/MMDSScrubStats.h
+@@ -75,8 +75,10 @@
+ 
+   template<class T, typename... Args>
+   friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
++#ifdef WITH_CRIMSON
+   template<class T, typename... Args>
+   friend MURef<T> crimson::make_message(Args&&... args);
++#endif
+ };
+ 
+ #endif
+--- a/src/messages/MMDSSnapUpdate.h
++++ b/src/messages/MMDSSnapUpdate.h
+@@ -58,8 +58,10 @@
+ private:
+   template<class T, typename... Args>
+   friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
++#ifdef WITH_CRIMSON
+   template<class T, typename... Args>
+   friend MURef<T> crimson::make_message(Args&&... args);
++#endif
+ };
+ 
+ #endif
+--- a/src/messages/MMDSTableRequest.h
++++ b/src/messages/MMDSTableRequest.h
+@@ -65,8 +65,10 @@
+ private:
+   template<class T, typename... Args>
+   friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
++#ifdef WITH_CRIMSON
+   template<class T, typename... Args>
+   friend MURef<T> crimson::make_message(Args&&... args);
++#endif
+ };
+ 
+ #endif
+--- a/src/messages/MMgrConfigure.h
++++ b/src/messages/MMgrConfigure.h
+@@ -81,8 +81,10 @@
+   using RefCountedObject::get;
+   template<class T, typename... Args>
+   friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
++#ifdef WITH_CRIMSON
+   template<class T, typename... Args>
+   friend MURef<T> crimson::make_message(Args&&... args);
++#endif
+ };
+ 
+ #endif
+--- a/src/messages/MMgrDigest.h
++++ b/src/messages/MMgrDigest.h
+@@ -53,8 +53,10 @@
+   using RefCountedObject::get;
+   template<class T, typename... Args>
+   friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
++#ifdef WITH_CRIMSON
+   template<class T, typename... Args>
+   friend MURef<T> crimson::make_message(Args&&... args);
++#endif
+ };
+ 
+ #endif
+--- a/src/messages/MMgrMap.h
++++ b/src/messages/MMgrMap.h
+@@ -53,8 +53,10 @@
+   using RefCountedObject::get;
+   template<class T, typename... Args>
+   friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
++#ifdef WITH_CRIMSON
+   template<class T, typename... Args>
+   friend MURef<T> crimson::make_message(Args&&... args);
++#endif
+ };
+ 
+ #endif
+--- a/src/messages/MMgrOpen.h
++++ b/src/messages/MMgrOpen.h
+@@ -92,8 +92,10 @@
+   using RefCountedObject::get;
+   template<class T, typename... Args>
+   friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
++#ifdef WITH_CRIMSON
+   template<class T, typename... Args>
+   friend MURef<T> crimson::make_message(Args&&... args);
++#endif
+ };
+ 
+ #endif
+--- a/src/messages/MMgrReport.h
++++ b/src/messages/MMgrReport.h
+@@ -218,8 +218,10 @@
+   using RefCountedObject::get;
+   template<class T, typename... Args>
+   friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
++#ifdef WITH_CRIMSON
+   template<class T, typename... Args>
+   friend MURef<T> crimson::make_message(Args&&... args);
++#endif
+ };
+ 
+ #endif
+--- a/src/messages/MRemoveSnaps.h
++++ b/src/messages/MRemoveSnaps.h
+@@ -51,8 +51,10 @@
+ private:
+   template<class T, typename... Args>
+   friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
++#ifdef WITH_CRIMSON
+   template<class T, typename... Args>
+   friend MURef<T> crimson::make_message(Args&&... args);
++#endif
+ };
+ 
+ #endif
+--- a/src/msg/Message.h
++++ b/src/msg/Message.h
+@@ -591,12 +591,14 @@
+ }
+ }
+ 
++#ifdef WITH_CRIMSON
+ namespace crimson {
+ template<class T, typename... Args>
+ MURef<T> make_message(Args&&... args) {
+   return {new T(std::forward<Args>(args)...), TOPNSPC::common::UniquePtrDeleter{}};
+ }
+ }
++#endif
+ 
+ namespace fmt {
+ // placed in the fmt namespace due to an ADL bug in g++ < 12

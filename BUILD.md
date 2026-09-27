@@ -8,7 +8,7 @@ Debian packages in a container and publishes them as signed apt repositories. Th
 per Ceph release (squid, tentacle, …), and it keeps every point release built
 into it.
 
-- Distributions: Debian bookworm/trixie, Ubuntu jammy/noble (any
+- Distributions: Debian bookworm/trixie/forky, Ubuntu jammy/noble (any
   `debian:`/`ubuntu:` base image should work)
 - Architectures: amd64 and arm64, each built natively on a host of that arch
 - Output: a static directory tree you can `rsync` to any web hosting
@@ -52,7 +52,12 @@ Packages are versioned `<upstream>-1~<distro><version>u<rev>`:
 |---|---|
 | Debian 12 bookworm | `19.2.3-1~deb12u1` |
 | Debian 13 trixie | `19.2.3-1~deb13u1` |
+| Debian 14 forky (testing) | `19.2.3-1~deb14u1` |
 | Ubuntu 24.04 noble | `19.2.3-1~ubuntu24.04u1` |
+
+Debian testing has no release number yet. The number it will be released as
+comes from `debian_version()` in [scripts/lib/releases.sh](scripts/lib/releases.sh);
+add the next codename there when it becomes testing.
 
 The numeric distro tag makes packages upgrade correctly on distribution
 upgrades. The version string also avoids `+`, which some static hosts (S3 and
@@ -118,6 +123,18 @@ gpg --quick-generate-key "Ceph apt repository <you@example.org>" ed25519 sign ne
 # Builder images, one per distribution, on every build host
 ./ceph-apt image bookworm trixie
 ```
+
+By default `./ceph-apt` reads `ceph-apt.conf` next to the script. To use
+another file, e.g. one per build host, pass it before the command with
+`-c`/`--config`, or set `CEPH_APT_CONF` (`-c` wins if both are given):
+
+```sh
+./ceph-apt -c ceph-apt.conf.pollux build 19.2.3 trixie
+CEPH_APT_CONF=ceph-apt.conf.pollux ./ceph-apt index
+```
+
+A file given this way must exist. A missing default `ceph-apt.conf` is fine,
+and the built-in defaults are used.
 
 ## Building
 

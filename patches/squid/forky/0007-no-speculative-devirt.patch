@@ -1,0 +1,24 @@
+Description: Build without speculative devirtualization
+ GCC 16 speculatively devirtualizes virtual calls and emits the inline
+ methods of the classes it guesses. In rgw_rest.cc (rgw_common) these are
+ the SWIFT handlers, which call into rgw_a; in ceph_test_rados_api_asio it
+ is Boost.Asio's coroutine-based spawn thread, which calls into
+ boost_coroutine. Neither library comes later on the link line, so linking
+ fails with undefined references. The optimization is optional, so turn it
+ off for all C++ code.
+---
+--- a/debian/rules
++++ b/debian/rules
+@@ -7,6 +7,12 @@
+ # headers, and many Ceph and bundled sources rely on that.
+ export DEB_CXXFLAGS_MAINT_APPEND = -include cstdint
+ 
++# GCC 16 speculatively devirtualizes virtual calls and emits inline methods of
++# possible targets, e.g. the SWIFT handlers in rgw_rest.cc or Boost.Asio's
++# coroutine-based spawn thread. Those reference libraries that the object is
++# not linked with (rgw_a, boost_coroutine), so linking fails.
++export DEB_CXXFLAGS_MAINT_APPEND += -fno-devirtualize-speculatively
++
+ include /usr/share/dpkg/default.mk
+ 
+ ifneq (,$(findstring WITH_STATIC_LIBSTDCXX,$(CEPH_EXTRA_CMAKE_ARGS)))

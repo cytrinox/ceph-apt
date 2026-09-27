@@ -22,6 +22,7 @@ RUN apt-get update \
         equivs \
         fakeroot \
         gnupg \
+        libdistro-info-perl \
         patch \
         xz-utils \
  && rm -rf /var/lib/apt/lists/*

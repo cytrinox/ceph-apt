@@ -8,6 +8,10 @@
 #   ./ceph-apt sign [--key=ID] [release...]   sign it locally with your gpg
 #   ./ceph-apt shell bookworm                 debug shell in the builder
 #
+# Global options (before the command):
+#   -c, --config FILE use FILE instead of ./ceph-apt.conf
+#                     (or set CEPH_APT_CONF=FILE)
+#
 # Build options:
 #   --rev N           rebuild number, the uN in 19.2.3-1~deb12uN (default 1).
 #                     Bump it to rebuild a version that is already in the pool.
@@ -19,12 +23,27 @@
 #   --prepare-only    stop after installing the build dependencies
 #   --force           overwrite packages already in the pool
 #
-# Settings come from ./ceph-apt.conf (see ceph-apt.conf.example).
+# Settings come from ./ceph-apt.conf by default (see ceph-apt.conf.example).
 #
 set -euo pipefail
 
+die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+
 HERE=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
-CONF=${CEPH_APT_CONF:-$HERE/ceph-apt.conf}
+CONF=${CEPH_APT_CONF:-}
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -c|--config) [ $# -ge 2 ] || die "$1 needs a file"; CONF=$2; shift 2 ;;
+        --config=*) CONF=${1#--config=}; shift ;;
+        *) break ;;
+    esac
+done
+if [ -n "$CONF" ]; then
+    # An explicitly chosen config must exist; the default one is optional.
+    [ -f "$CONF" ] || die "config file $CONF not found"
+else
+    CONF=$HERE/ceph-apt.conf
+fi
 # shellcheck disable=SC1090
 [ ! -f "$CONF" ] || . "$CONF"
 # Let a GNUPGHOME from the config reach gpg.
@@ -42,8 +61,6 @@ VOLUME_OPTS=${VOLUME_OPTS:-}
 PASS_ENV=(DEBFULLNAME DEBEMAIL ARCHES REPO_ORIGIN REPO_LABEL
           CCACHE_MAXSIZE CEPH_DOWNLOAD_URL CEPH_EXTRA_CMAKE_ARGS
           DEB_BUILD_PROFILES BUILD_ARCH_INDEP)
-
-die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
 usage() {
     # Print the header comment.
