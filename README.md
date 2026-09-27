@@ -1,9 +1,18 @@
 # ceph-apt: Ceph packages for Debian
 
-Apt repositories with [Ceph](https://ceph.io) packages for Debian, built from
-the upstream Ceph release tarballs:
+> [!WARNING]
+> **This project and its repositories are experimental. Do not use them for
+> production systems or any data you care about.**
+>
+> Packages, URLs, the signing key, version numbering and the repository layout
+> may change or disappear at any time, without notice. Packages may be
+> removed or rebuilt, and there are no updates or security fixes you can rely
+> on.
 
-**https://ceph-apt.cytrinox.net/**
+Apt repositories with [Ceph](https://ceph.io) packages for Debian, built from
+the upstream Ceph release tarballs. Base URL of the repositories:
+
+**https://ceph-apt.nbg1.your-objectstorage.com/repo/**
 
 This is not an official Ceph project, and it is not affiliated with the Ceph
 Foundation or the upstream Ceph packaging.
@@ -15,27 +24,29 @@ release, so you can stay on a point release or go back to one.
 
 | Ceph release | Repository URL | Debian 12 (bookworm) | Debian 13 (trixie) |
 |---|---|---|---|
-| Squid (19.2.x) | `https://ceph-apt.cytrinox.net/squid` | ✓ | ✓ |
-| Tentacle (20.2.x) | `https://ceph-apt.cytrinox.net/tentacle` | ✓ | ✓ |
+| Tentacle (20.2.x) | `https://ceph-apt.nbg1.your-objectstorage.com/repo/tentacle` | – | ✓ |
+| Squid (19.2.x) | `https://ceph-apt.nbg1.your-objectstorage.com/repo/squid` | – | – |
 
-Architectures: `amd64` and `arm64`. Debug (`-dbg`) packages are not provided.
+Currently only `amd64` packages are published; Squid, bookworm and `arm64`
+are not available yet. Debug (`-dbg`) packages are not provided.
 
 ## Setup
 
-The examples use Squid. For Tentacle, replace `squid` with `tentacle`.
+The examples use Tentacle. For another release, replace `tentacle` with its
+name.
 
 ### 1. Install the signing key
 
 ```sh
-sudo apt install curl ca-certificates
-sudo curl -fsSL https://ceph-apt.cytrinox.net/ceph-apt.asc -o /usr/share/keyrings/ceph-apt.asc
+sudo apt install curl ca-certificates gpg
+sudo curl -fsSL https://ceph-apt.nbg1.your-objectstorage.com/repo/ceph-apt.asc -o /usr/share/keyrings/ceph-apt.asc
 gpg --show-keys /usr/share/keyrings/ceph-apt.asc
 ```
 
-Check that the fingerprint matches:
+Check that the fingerprint of the key matches:
 
 ```
-TODO: fingerprint of the repository signing key
+F844 037D BE0E 9385 6475  B95A 9FDA 52CB 9EDE 279E
 ```
 
 ### 2. Add the repository
@@ -45,7 +56,7 @@ This picks up your Debian release automatically:
 ```sh
 sudo tee /etc/apt/sources.list.d/ceph-apt.sources <<EOF
 Types: deb
-URIs: https://ceph-apt.cytrinox.net/squid
+URIs: https://ceph-apt.nbg1.your-objectstorage.com/repo/tentacle
 Suites: $(. /etc/os-release && echo "$VERSION_CODENAME")
 Components: main
 Signed-By: /usr/share/keyrings/ceph-apt.asc
@@ -55,7 +66,7 @@ EOF
 Or, in the classic one-line `sources.list` format:
 
 ```sh
-echo "deb [signed-by=/usr/share/keyrings/ceph-apt.asc] https://ceph-apt.cytrinox.net/squid $(. /etc/os-release && echo "$VERSION_CODENAME") main" \
+echo "deb [signed-by=/usr/share/keyrings/ceph-apt.asc] https://ceph-apt.nbg1.your-objectstorage.com/repo/tentacle $(. /etc/os-release && echo "$VERSION_CODENAME") main" \
     | sudo tee /etc/apt/sources.list.d/ceph-apt.list
 ```
 

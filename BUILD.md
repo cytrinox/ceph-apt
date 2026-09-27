@@ -29,7 +29,7 @@ repo/<release>/dists/<dist>/{Release,main/binary-*/Packages}
 repo/<release>/dists/<dist>/{InRelease,Release.gpg}
         │  ./ceph-apt publish                   (index + sign + upload with rclone)
         ▼
-S3 bucket → https://ceph-apt.cytrinox.net/<release>
+S3 bucket → https://ceph-apt.nbg1.your-objectstorage.com/repo/<release>
 ```
 
 - `build` uses the `debian/` directory that ships in the upstream release
