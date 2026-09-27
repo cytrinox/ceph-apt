@@ -1,0 +1,16 @@
+Description: deb: support systemd unit dir changes (backport of 19cef190694d)
+ Current systemd (Debian trixie and later) installs units to
+ /usr/lib/systemd/system, but the debian/*.install files before squid 19.2.4
+ only look in lib/systemd/system, so dh_install fails with missing files.
+ Backport of upstream commit 19cef190694d15fda5404df2641e2d9ea92112eb
+ ("deb: use variable expansion to support systemd unit dir changes"), which
+ matches both locations with {usr/,}lib/systemd/system.
+ This part covers ceph-exporter.install, which exists since 19.2.3.
+Ceph-Version: >= 19.2.3, < 19.2.4
+---
+--- a/debian/ceph-exporter.install
++++ b/debian/ceph-exporter.install
+@@ -1,2 +1,2 @@
+-lib/systemd/system/ceph-exporter*
++{usr/,}lib/systemd/system/ceph-exporter*
+ usr/bin/ceph-exporter

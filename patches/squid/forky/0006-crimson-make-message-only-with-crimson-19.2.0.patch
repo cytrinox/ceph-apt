@@ -6,7 +6,7 @@ Description: Declare crimson::make_message only in crimson builds
  ceph::make_message, which is visible through "using namespace ceph".
  crimson::make_message is only used by the crimson OSD, so declare it and
  the friend declarations only when WITH_CRIMSON is set.
-Ceph-Version: >= 19.2.1
+Ceph-Version: = 19.2.0
 ---
 --- a/src/messages/MCacheExpire.h
 +++ b/src/messages/MCacheExpire.h
@@ -127,7 +127,7 @@ Ceph-Version: >= 19.2.1
  
 --- a/src/messages/MClientReply.h
 +++ b/src/messages/MClientReply.h
-@@ -451,8 +451,10 @@
+@@ -428,8 +428,10 @@
  private:
    template<class T, typename... Args>
    friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
@@ -634,7 +634,7 @@ Ceph-Version: >= 19.2.1
  #endif // CEPH_MESSAGES_MMDSPING_H
 --- a/src/messages/MMDSQuiesceDbAck.h
 +++ b/src/messages/MMDSQuiesceDbAck.h
-@@ -51,8 +51,10 @@
+@@ -52,6 +52,8 @@
  private:
    template<class T, typename... Args>
    friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
@@ -642,12 +642,10 @@ Ceph-Version: >= 19.2.1
    template<class T, typename... Args>
    friend MURef<T> crimson::make_message(Args&&... args);
 +#endif
- 
-   QuiesceDbPeerAck ack;
  };
 --- a/src/messages/MMDSQuiesceDbListing.h
 +++ b/src/messages/MMDSQuiesceDbListing.h
-@@ -50,8 +50,10 @@
+@@ -51,6 +51,8 @@
  private:
    template<class T, typename... Args>
    friend boost::intrusive_ptr<T> ceph::make_message(Args&&... args);
@@ -655,8 +653,6 @@ Ceph-Version: >= 19.2.1
    template<class T, typename... Args>
    friend MURef<T> crimson::make_message(Args&&... args);
 +#endif
- 
-   QuiesceDbPeerListing peer_listing;
  };
 --- a/src/messages/MMDSResolveAck.h
 +++ b/src/messages/MMDSResolveAck.h
