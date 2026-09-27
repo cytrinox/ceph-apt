@@ -1,0 +1,18 @@
+Description: Build the bundled Arrow 6 as C++17
+ Squid and reef bundle Apache Arrow 6.0.1, which compiles as C++11 unless
+ CMAKE_CXX_STANDARD is set. On Debian trixie and later the system re2 includes Abseil,
+ which requires C++17, so scalar_string.cc fails with
+ "C++ versions less than C++17 are not supported".
+---
+--- a/cmake/modules/BuildArrow.cmake
++++ b/cmake/modules/BuildArrow.cmake
+@@ -3,6 +3,9 @@
+ function(build_arrow)
+   # only enable the parquet component
+   set(arrow_CMAKE_ARGS -DARROW_PARQUET=ON)
++  # Arrow 6 defaults to C++11, but the system re2 includes Abseil, which
++  # requires C++17 (Debian forky).
++  list(APPEND arrow_CMAKE_ARGS -DCMAKE_CXX_STANDARD=17)
+ 
+   # only use preinstalled dependencies for arrow, don't fetch/build any
+   list(APPEND arrow_CMAKE_ARGS -DARROW_DEPENDENCY_SOURCE=SYSTEM)
