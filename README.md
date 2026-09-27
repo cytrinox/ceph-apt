@@ -12,7 +12,7 @@
 Apt repositories with [Ceph](https://ceph.io) packages for Debian, built from
 the upstream Ceph release tarballs. Base URL of the repositories:
 
-**https://ceph-apt.nbg1.your-objectstorage.com/repo/**
+**https://ceph.apt.cytrinox.net/repo/**
 
 This is not an official Ceph project, and it is not affiliated with the Ceph
 Foundation or the upstream Ceph packaging.
@@ -24,8 +24,8 @@ release, so you can stay on a point release or go back to one.
 
 | Ceph release | Repository URL | Debian 12 (bookworm) | Debian 13 (trixie) |
 |---|---|---|---|
-| Tentacle (20.2.x) | `https://ceph-apt.nbg1.your-objectstorage.com/repo/tentacle` | – | ✓ |
-| Squid (19.2.x) | `https://ceph-apt.nbg1.your-objectstorage.com/repo/squid` | – | – |
+| Tentacle (20.2.x) | `https://ceph.apt.cytrinox.net/repo/tentacle` | – | ✓ |
+| Squid (19.2.x) | `https://ceph.apt.cytrinox.net/repo/squid` | – | – |
 
 Currently only `amd64` packages are published; Squid, bookworm and `arm64`
 are not available yet. Debug (`-dbg`) packages are not provided.
@@ -39,7 +39,7 @@ name.
 
 ```sh
 sudo apt install curl ca-certificates gpg
-sudo curl -fsSL https://ceph-apt.nbg1.your-objectstorage.com/repo/ceph-apt.asc -o /usr/share/keyrings/ceph-apt.asc
+sudo curl -fsSL https://ceph.apt.cytrinox.net/repo/ceph-apt.asc -o /usr/share/keyrings/ceph-apt.asc
 gpg --show-keys /usr/share/keyrings/ceph-apt.asc
 ```
 
@@ -56,7 +56,7 @@ This picks up your Debian release automatically:
 ```sh
 sudo tee /etc/apt/sources.list.d/ceph-apt.sources <<EOF
 Types: deb
-URIs: https://ceph-apt.nbg1.your-objectstorage.com/repo/tentacle
+URIs: https://ceph.apt.cytrinox.net/repo/tentacle
 Suites: $(. /etc/os-release && echo "$VERSION_CODENAME")
 Components: main
 Signed-By: /usr/share/keyrings/ceph-apt.asc
@@ -66,7 +66,7 @@ EOF
 Or, in the classic one-line `sources.list` format:
 
 ```sh
-echo "deb [signed-by=/usr/share/keyrings/ceph-apt.asc] https://ceph-apt.nbg1.your-objectstorage.com/repo/tentacle $(. /etc/os-release && echo "$VERSION_CODENAME") main" \
+echo "deb [signed-by=/usr/share/keyrings/ceph-apt.asc] https://ceph.apt.cytrinox.net/repo/tentacle $(. /etc/os-release && echo "$VERSION_CODENAME") main" \
     | sudo tee /etc/apt/sources.list.d/ceph-apt.list
 ```
 

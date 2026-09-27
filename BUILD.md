@@ -29,7 +29,7 @@ repo/<release>/dists/<dist>/{Release,main/binary-*/Packages}
 repo/<release>/dists/<dist>/{InRelease,Release.gpg}
         │  ./ceph-apt publish                   (index + sign + upload with rclone)
         ▼
-S3 bucket → https://ceph-apt.nbg1.your-objectstorage.com/repo/<release>
+S3 bucket → https://ceph.apt.cytrinox.net/repo/<release>
 ```
 
 - `build` uses the `debian/` directory that ships in the upstream release
@@ -301,8 +301,10 @@ the bucket.
 apt clients need anonymous read access to the published prefix, e.g. through
 a bucket policy that allows `s3:GetObject` on `ceph-apt/repo/*`. With the
 default settings the repository is then reachable at
-`https://ceph-apt.nbg1.your-objectstorage.com/repo/<release>`; put that
-behind your own domain if you want a stable URL. `incoming/` holds unsigned
+`https://ceph-apt.nbg1.your-objectstorage.com/repo/<release>`. Clients use
+`https://ceph.apt.cytrinox.net/repo/<release>`, a proxy for the bucket that
+redirects each request to a short-lived signed S3 URL, so the URL in
+README.md stays stable even if the storage moves. `incoming/` holds unsigned
 packages and does not need to be public.
 
 Storage grows with every point release: about 1.2 GB per distribution and
