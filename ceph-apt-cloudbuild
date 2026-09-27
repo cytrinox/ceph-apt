@@ -27,6 +27,8 @@ from pathlib import Path
 # Defaults for CEPH_APT_GIT_URL and CEPH_APT_S3_URL. Adjust to your setup.
 DEFAULT_GIT_URL = "https://github.com/cytrinox/ceph-apt.git"
 DEFAULT_S3_URL = "https://nbg1.your-objectstorage.com/ceph-apt/incoming"
+# Where ./ceph-apt publish uploads the repository; keep in sync with ceph-apt.
+DEFAULT_S3_PUBLISH_URL = "https://nbg1.your-objectstorage.com/ceph-apt/repo"
 
 API_URL = "https://api.hetzner.cloud/v1"
 LABELS = {"managed-by": "ceph-apt-cloudbuild"}
@@ -191,8 +193,10 @@ def s3_request(method, s3_url, key, access_key, secret_key, region, body=b""):
                                  method=method, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=30):
-            pass
+            return True
     except urllib.error.HTTPError as e:
+        if method == "HEAD" and e.code == 404:
+            return False
         text = e.read().decode(errors="replace")
         code = re.search(r"<Code>(.*?)</Code>", text)
         msg = re.search(r"<Message>(.*?)</Message>", text)
@@ -218,6 +222,43 @@ def check_s3(s3_url, access_key, secret_key, region):
         # fetch-incoming moves (deletes) files, so this would fail there, too.
         raise Error(f"{e}\nuploading works, but deleting does not; "
                     "fetch-incoming needs delete permission") from None
+
+
+def option_value(opts, name, default):
+    """The value of "--name VALUE" in a ceph-apt build option list."""
+    for i, opt in enumerate(opts):
+        if opt == name and i + 1 < len(opts):
+            default = opts[i + 1]
+    return default
+
+
+def check_not_built(version, dists, arch, build_opts, urls, access_key, secret_key, region):
+    """Fails if the package version to be built already exists in one of the
+    S3 locations (built but not fetched yet, or published), so no build time
+    is spent on packages the repository would refuse anyway."""
+    if "--force" in build_opts:
+        log("--force given, not checking for existing packages")
+        return
+    rev = option_value(build_opts, "--rev", "1")
+    lib = Path(__file__).resolve().parent / "scripts" / "lib" / "releases.sh"
+    existing = []
+    for dist in dists:
+        res = subprocess.run(
+            ["bash", "-c", '. "$1" && ceph_release_name "$2" && codename_tag "$3"', "_",
+             str(lib), version, dist], capture_output=True, text=True)
+        names = res.stdout.split()
+        if res.returncode != 0 or len(names) != 2:
+            log(f"cannot map {version}/{dist} to a package version, not checking it")
+            continue
+        release = option_value(build_opts, "--release", names[0])
+        deb = f"ceph-common_{version}-1~{names[1]}u{rev}_{arch}.deb"
+        key = f"{release}/pool/{dist}/main/c/ceph/{deb}"
+        for url in urls:
+            if s3_request("HEAD", url, key, access_key, secret_key, region):
+                existing.append(f"{url.rstrip('/')}/{key}")
+    if existing:
+        raise Error("these packages already exist:\n  " + "\n  ".join(existing)
+                    + "\nbuild a new revision with -- --rev N (or overwrite with -- --force)")
 
 
 def check_git(url, ref):
@@ -375,11 +416,17 @@ def cmd_build(args, build_opts):
 
     # Check everything that can fail cheaply before paying for a server.
     log("Checking the Hetzner token, repository and S3 upload")
-    if not hc.request("GET", f"/server_types?name={urllib.parse.quote(args.server_type)}")["server_types"]:
+    types = hc.request("GET", f"/server_types?name={urllib.parse.quote(args.server_type)}")["server_types"]
+    if not types:
         raise Error(f"unknown Hetzner server type {args.server_type!r}")
+    arch = {"x86": "amd64", "arm": "arm64"}.get(types[0].get("architecture"), "amd64")
     check_git(git_url, args.ref)
-    check_s3(s3_url, os.environ["CEPH_APT_S3_ACCESS_KEY_ID"],
-             os.environ["CEPH_APT_S3_SECRET_ACCESS_KEY"], os.environ.get("CEPH_APT_S3_REGION"))
+    s3_auth = (os.environ["CEPH_APT_S3_ACCESS_KEY_ID"], os.environ["CEPH_APT_S3_SECRET_ACCESS_KEY"],
+               os.environ.get("CEPH_APT_S3_REGION"))
+    check_s3(s3_url, *s3_auth)
+    log(f"Checking that {args.version} for {', '.join(args.dists)} on {arch} is not built yet")
+    check_not_built(args.version, args.dists, arch, build_opts,
+                    [s3_url, os.environ.get("CEPH_APT_S3_PUBLISH_URL", DEFAULT_S3_PUBLISH_URL)], *s3_auth)
 
     name = f"ceph-apt-{args.version.replace('.', '-')}-{args.server_type}-{time.strftime('%Y%m%d-%H%M%S')}"
     workdir = STATE_DIR / name
@@ -499,6 +546,8 @@ e.g. --rev N, --changelog TEXT, --jobs N or --with-dbg.
 Before a server is created, the Hetzner token and server type, the
 repository and --ref, and the S3 upload (a test object that is deleted again)
 are checked, so a wrong setting fails immediately and not after the build.
+The build also stops if the package version already exists in incoming/ or
+in the published repository; use -- --rev N for a new revision.
 
 The server clones the repository from CEPH_APT_GIT_URL, so the patches and
 scripts used are those of the pushed branch (--ref), not of your local
@@ -555,6 +604,8 @@ environment:
   CEPH_APT_S3_URL                upload target, https://<endpoint>/<bucket>[/<prefix>]
                                  or s3://<bucket>[/<prefix>]
                                  (default: {DEFAULT_S3_URL})
+  CEPH_APT_S3_PUBLISH_URL        published repository, checked for packages that
+                                 already exist (default: {DEFAULT_S3_PUBLISH_URL})
   CEPH_APT_S3_REGION             S3 region (derived for Hetzner Object Storage)
   CEPH_APT_GIT_URL               repository the server clones; include a read-only
                                  token for a private repository

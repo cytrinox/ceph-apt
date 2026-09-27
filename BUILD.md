@@ -224,6 +224,12 @@ the repository and `--ref` are reachable (with the local `git`, if installed),
 and that it can upload to and delete from `CEPH_APT_S3_URL`. A wrong setting
 therefore fails immediately, not after hours of building.
 
+It also stops if the package version it would build already exists in
+`incoming/` or in the published repository (`CEPH_APT_S3_PUBLISH_URL`, same
+default as for `./ceph-apt publish`): the build server starts with an empty
+pool, so the pool check of `./ceph-apt build` cannot catch that there. Build a
+new revision with `-- --rev N`; `-- --force` skips the check.
+
 The server type decides the architecture: `cax*` (Ampere) builds arm64,
 `cpx*`/`ccx*` build amd64. Pick one with at least 32 GB RAM, e.g. `cax41`
 or `ccx43`. The server starts without a ccache, so every build is a full

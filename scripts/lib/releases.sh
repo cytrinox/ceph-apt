@@ -45,6 +45,18 @@ distro_tag() {
     fi
 }
 
+# codename_tag <codename>  ->  deb12, ubuntu24.04, ...
+# The same tag distro_tag computes inside a container of that distribution,
+# for use outside of it (e.g. ceph-apt-cloudbuild).
+codename_tag() {
+    case "$1" in
+        jammy) echo ubuntu22.04 ;;
+        noble) echo ubuntu24.04 ;;
+        resolute) echo ubuntu26.04 ;;
+        *) local v; v=$(debian_version "$1") || return 1; echo "deb$v" ;;
+    esac
+}
+
 # distro_codename  ->  bookworm, trixie, noble, ...
 distro_codename() {
     local VERSION_CODENAME
