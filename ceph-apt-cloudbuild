@@ -16,8 +16,10 @@ import os
 import re
 import shlex
 import shutil
+import io
 import subprocess
 import sys
+import tarfile
 import time
 import urllib.error
 import urllib.parse
@@ -63,6 +65,11 @@ log "Cloning $GIT_URL_DISPLAY${GIT_REF:+ ($GIT_REF)}"
 git clone -q --depth 1 ${GIT_REF:+--branch "$GIT_REF"} "$GIT_URL" /root/ceph-apt
 cd /root/ceph-apt
 log "Using commit $(git log -1 --format='%h %s')"
+if [ -f /root/local-patches.tar ]; then
+    log "Using the patches/ directory of the local checkout instead"
+    rm -rf patches
+    tar -xf /root/local-patches.tar
+fi
 cat > ceph-apt.conf <<EOF
 REPO_DIR=$REPO
 WORK_DIR=/srv/ceph-apt/work
@@ -463,6 +470,11 @@ def cmd_build(args, build_opts):
         remote.put("/root/ceph-apt.env",
                    "".join(f"export {k}={shlex.quote(v)}\n" for k, v in env.items()))
         remote.put("/root/ceph-apt-build.sh", REMOTE_SCRIPT)
+        if args.local_patches:
+            buf = io.BytesIO()
+            with tarfile.open(fileobj=buf, mode="w") as tar:
+                tar.add(Path(__file__).resolve().parent / "patches", arcname="patches")
+            remote.run("cat > /root/local-patches.tar", stdin=buf.getvalue())
         args_str = " ".join(shlex.quote(a) for a in [args.version, *args.dists, "--", *build_opts])
         remote.run("systemd-run --quiet --unit=ceph-apt-build"
                    " -p StandardOutput=append:/root/build.log -p StandardError=append:/root/build.log"
@@ -647,6 +659,9 @@ def main(argv):
     b.add_argument("--image", default="debian-13", help="OS image of the server (default: %(default)s)")
     b.add_argument("--ref", help="branch or tag of the repository to build with "
                                  "(default: its default branch); push local changes first")
+    b.add_argument("--local-patches", action="store_true",
+                   help="use the patches/ directory of this checkout instead of the cloned "
+                        "one, to test patches before pushing them")
     b.add_argument("--max-hours", type=float, default=12,
                    help="give up and delete the server after this many hours (default: %(default)g)")
     b.add_argument("--keep", action="store_true", help="keep the server after the build")

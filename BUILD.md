@@ -250,6 +250,8 @@ export CEPH_APT_DEBFULLNAME="Your Name" CEPH_APT_DEBEMAIL=you@example.org  # opt
 - Options after `--` go to `./ceph-apt build`.
 - `--ref` clones a specific branch or tag. The server clones the repository,
   so local changes must be pushed first.
+- `--local-patches` uses the `patches/` directory of your checkout instead of
+  the cloned one, to test new patches before pushing them.
 - `--keep-on-failure` keeps a failed server for inspection and prints the SSH
   command. Delete it afterwards with `cleanup`.
 - `--max-hours` (default 12) is the limit after which the server is deleted

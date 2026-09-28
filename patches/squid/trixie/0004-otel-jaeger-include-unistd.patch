@@ -1,0 +1,17 @@
+Description: opentelemetry-cpp: include <unistd.h> in the Jaeger UDP transport
+ TUDPTransport.cc calls ::close() without including <unistd.h>. The thrift
+ headers of Debian trixie no longer provide it indirectly: "'::close' has
+ not been declared". Squid 19.2.3 and later include the header; do the same.
+Ceph-Version: < 19.2.3
+---
+--- a/src/jaegertracing/opentelemetry-cpp/exporters/jaeger/src/TUDPTransport.cc
++++ b/src/jaegertracing/opentelemetry-cpp/exporters/jaeger/src/TUDPTransport.cc
+@@ -3,6 +3,8 @@
+ 
+ #include <sstream>  // std::stringstream
+ 
++#include <unistd.h>
++
+ #include "TUDPTransport.h"
+ #include "opentelemetry/sdk_config.h"
+ 
