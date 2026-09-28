@@ -1,6 +1,6 @@
 # Copy to ceph-apt.conf and adjust. Sourced by ./ceph-apt (bash syntax).
 
-# The apt repository: one sub-directory per Ceph release (squid/, tentacle/...).
+# The apt repository: one sub-directory per Ceph series (squid/19.2/, ...).
 # `./ceph-apt publish` uploads it to CEPH_APT_S3_PUBLISH_URL.
 REPO_DIR=/srv/ceph-apt/repo
 

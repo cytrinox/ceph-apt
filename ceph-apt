@@ -4,13 +4,19 @@
 #
 #   ./ceph-apt image bookworm trixie          build the builder images
 #   ./ceph-apt build 19.2.3 bookworm [opts]   build Ceph into the repo pool
-#   ./ceph-apt index [release...]             regenerate apt metadata (unsigned)
-#   ./ceph-apt sign [--key=ID] [release...]   sign it locally with your gpg
+#   ./ceph-apt index [release[/series]...]    regenerate apt metadata (unsigned)
+#   ./ceph-apt sign [--key=ID] [release[/series]...]
+#                                             sign it locally with your gpg
 #   ./ceph-apt fetch-incoming [--dry-run]     move packages built by ceph-apt-cloudbuild
 #                                             from S3 into the repo pool
-#   ./ceph-apt publish [--key=ID] [release...] index, sign and upload the repo
+#   ./ceph-apt publish [--key=ID] [release[/series]...]
+#                                             index, sign and upload the repo
 #                                             to CEPH_APT_S3_PUBLISH_URL
 #   ./ceph-apt shell bookworm                 debug shell in the builder
+#
+# The repository has one apt repository per Ceph series (major.minor), e.g.
+# REPO_DIR/squid/19.2 or REPO_DIR/umbrella/21.1; "squid" alone means all of
+# its series.
 #
 # Global options (before the command):
 #   -c, --config FILE use FILE instead of ./ceph-apt.conf
@@ -163,13 +169,13 @@ cmd_index() {
 # Signs on the host with the user's own gpg (agent, pinentry, smartcards);
 # the key never enters a container.
 cmd_sign() {
-    local key=${SIGNING_KEY:-} releases=() release d rel suite n=0
+    local key=${SIGNING_KEY:-} args=() repos=() arg name d rel suite n=0
     while [ $# -gt 0 ]; do
         case "$1" in
             --key=*) key=${1#--key=} ;;
             --key) [ $# -ge 2 ] || die "--key needs a key ID"; key=$2; shift ;;
             -*) die "unknown option $1" ;;
-            *) releases+=("$1") ;;
+            *) args+=("$1") ;;
         esac
         shift
     done
@@ -178,23 +184,25 @@ cmd_sign() {
     gpg --batch --list-secret-keys "$key" > /dev/null 2>&1 \
         || die "no secret key '$key' in your keyring${GNUPGHOME:+ ($GNUPGHOME)}"
 
-    if [ ${#releases[@]} -eq 0 ]; then
-        for d in "$REPO_DIR"/*/dists; do
-            [ -d "$d" ] && releases+=("$(basename "$(dirname "$d")")")
+    # Repositories are <release>/<series>; "squid" means all series of squid.
+    [ ${#args[@]} -gt 0 ] || args=("*")
+    for arg in "${args[@]}"; do
+        [[ "$arg" == */* ]] || arg="$arg/*"
+        for d in "$REPO_DIR"/$arg/dists; do
+            [ -d "$d" ] && repos+=("$(dirname "${d#"$REPO_DIR"/}")")
         done
-    fi
-    [ ${#releases[@]} -gt 0 ] || die "nothing to sign in $REPO_DIR, run ./ceph-apt index first"
+    done
+    [ ${#repos[@]} -gt 0 ] || die "nothing to sign in $REPO_DIR, run ./ceph-apt index first"
 
     local gpg=(gpg --yes --local-user "$key" --digest-algo SHA512)
     # Without a terminal there is no pinentry; rely on the agent's cache.
     [ -t 0 ] || gpg+=(--batch)
 
-    for release in "${releases[@]}"; do
-        [ -d "$REPO_DIR/$release/dists" ] || die "$REPO_DIR/$release/dists does not exist"
-        for rel in "$REPO_DIR/$release"/dists/*/Release; do
+    for name in "${repos[@]}"; do
+        for rel in "$REPO_DIR/$name"/dists/*/Release; do
             [ -e "$rel" ] || continue
             suite=$(dirname "$rel")
-            echo "==> Signing $release/$(basename "$suite")" >&2
+            echo "==> Signing $name/$(basename "$suite")" >&2
             "${gpg[@]}" --clearsign --output "$suite/InRelease.tmp" "$rel"
             "${gpg[@]}" --armor --detach-sign --output "$suite/Release.gpg.tmp" "$rel"
             mv "$suite/InRelease.tmp" "$suite/InRelease"
@@ -290,11 +298,11 @@ cmd_publish() {
 
     local copy=(rclone copy --stats-one-line -v "$REPO_DIR" "$S3_REMOTE")
     echo "==> Uploading packages to $CEPH_APT_S3_PUBLISH_URL" >&2
-    "${copy[@]}" --exclude '/*/dists/**'
+    "${copy[@]}" --exclude '/*/*/dists/**'
     echo "==> Uploading package indexes" >&2
-    "${copy[@]}" --include '/*/dists/*/main/**'
+    "${copy[@]}" --include '/*/*/dists/*/main/**'
     echo "==> Uploading signed Release files" >&2
-    "${copy[@]}" --include '/*/dists/*/{Release,InRelease,Release.gpg}'
+    "${copy[@]}" --include '/*/*/dists/*/{Release,InRelease,Release.gpg}'
     echo "==> Published" >&2
 }
 

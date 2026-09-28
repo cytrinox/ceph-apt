@@ -19,21 +19,27 @@ Foundation or the upstream Ceph packaging.
 
 ## What's available
 
-There is one repository per Ceph release. Each repository keeps every point
-release, so you can stay on a point release or go back to one.
+There is one repository per Ceph series (`major.minor`), e.g.
+`repo/squid/19.2`. A repository only contains the point releases of its
+series: with the Squid 19.2 repository you get 19.2.x updates, but never
+20.2. Pre-releases of a future Ceph release (e.g. 21.1.x) get a repository of
+their own. Each repository keeps every point release, so you can stay on a
+point release or go back to one.
 
-| Ceph release | Repository URL | Debian 12 (bookworm) | Debian 13 (trixie) |
-|---|---|---|---|
-| Tentacle (20.2.x) | `https://ceph.apt.cytrinox.net/repo/tentacle` | – | ✓ |
-| Squid (19.2.x) | `https://ceph.apt.cytrinox.net/repo/squid` | – | – |
+| Ceph series | Repository URL | Debian 12 (bookworm) | Debian 13 (trixie) | Debian 14 (forky) |
+|---|---|---|---|---|
+| Tentacle 20.2 | `https://ceph.apt.cytrinox.net/repo/tentacle/20.2` | ✓ | ✓ | – |
+| Squid 19.2 | `https://ceph.apt.cytrinox.net/repo/squid/19.2` | ✓ | ✓ | ✓ |
+| Reef 18.2 | `https://ceph.apt.cytrinox.net/repo/reef/18.2` | ✓ | ✓ | ✓ |
 
-Currently only `amd64` packages are published; Squid, bookworm and `arm64`
-are not available yet. Debug (`-dbg`) packages are not provided.
+Debian 14 (forky) is Debian's current testing release. Only `amd64` packages
+are published; `arm64` is not available yet. Debug (`-dbg`) packages are not
+provided.
 
 ## Setup
 
-The examples use Tentacle. For another release, replace `tentacle` with its
-name.
+The examples use Tentacle 20.2. For another series, replace `tentacle/20.2`
+with its path from the table.
 
 ### 1. Install the signing key
 
@@ -56,7 +62,7 @@ This picks up your Debian release automatically:
 ```sh
 sudo tee /etc/apt/sources.list.d/ceph-apt.sources <<EOF
 Types: deb
-URIs: https://ceph.apt.cytrinox.net/repo/tentacle
+URIs: https://ceph.apt.cytrinox.net/repo/tentacle/20.2
 Suites: $(. /etc/os-release && echo "$VERSION_CODENAME")
 Components: main
 Signed-By: /usr/share/keyrings/ceph-apt.asc
@@ -66,7 +72,7 @@ EOF
 Or, in the classic one-line `sources.list` format:
 
 ```sh
-echo "deb [signed-by=/usr/share/keyrings/ceph-apt.asc] https://ceph.apt.cytrinox.net/repo/tentacle $(. /etc/os-release && echo "$VERSION_CODENAME") main" \
+echo "deb [signed-by=/usr/share/keyrings/ceph-apt.asc] https://ceph.apt.cytrinox.net/repo/tentacle/20.2 $(. /etc/os-release && echo "$VERSION_CODENAME") main" \
     | sudo tee /etc/apt/sources.list.d/ceph-apt.list
 ```
 
@@ -149,7 +155,7 @@ release again.
    for the supported upgrade paths and the required order (usually mons, then
    mgrs, OSDs, MDS, RGW).
 2. Change the URL in `/etc/apt/sources.list.d/ceph-apt.sources` (or
-   `ceph-apt.list`) from `…/squid` to `…/tentacle`.
+   `ceph-apt.list`) from `…/squid/19.2` to `…/tentacle/20.2`.
 3. `sudo apt update && sudo apt full-upgrade` on each node, in the order the
    release notes describe, and restart the daemons.
 

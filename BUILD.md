@@ -5,8 +5,9 @@ This document is for maintaining the repository. To install Ceph from it, see
 
 The tooling in this project builds upstream [Ceph](https://ceph.io) releases as
 Debian packages in a container and publishes them as signed apt repositories. There is one repository
-per Ceph release (squid, tentacle, …), and it keeps every point release built
-into it.
+per Ceph series, `<release>/<major.minor>` (e.g. `squid/19.2`, or
+`umbrella/21.1` for pre-releases), and it keeps every point release built into
+it. Users of a series only get its point releases.
 
 - Distributions: Debian bookworm/trixie/forky, Ubuntu jammy/noble (any
   `debian:`/`ubuntu:` base image should work)
@@ -20,16 +21,16 @@ into it.
 download.ceph.com/tarballs/ceph-X.Y.Z.tar.gz
         │  ./ceph-apt build X.Y.Z <dist>      (container per dist, native arch)
         ▼
-repo/<release>/pool/<dist>/main/c/ceph/*.deb      (immutable, all versions kept)
+repo/<release>/<series>/pool/<dist>/main/c/ceph/*.deb   (immutable, all versions kept)
         │  ./ceph-apt index                     (container, apt-ftparchive)
         ▼
-repo/<release>/dists/<dist>/{Release,main/binary-*/Packages}
+repo/<release>/<series>/dists/<dist>/{Release,main/binary-*/Packages}
         │  ./ceph-apt sign                      (host, your own gpg)
         ▼
-repo/<release>/dists/<dist>/{InRelease,Release.gpg}
+repo/<release>/<series>/dists/<dist>/{InRelease,Release.gpg}
         │  ./ceph-apt publish                   (index + sign + upload with rclone)
         ▼
-S3 bucket → https://ceph.apt.cytrinox.net/repo/<release>
+S3 bucket → https://ceph.apt.cytrinox.net/repo/<release>/<series>
 ```
 
 - `build` uses the `debian/` directory that ships in the upstream release
@@ -103,14 +104,19 @@ Without `--changelog` the entry reads "Rebuild of upstream Ceph <version> for
 ```
 repo/
   ceph-apt.asc                                  public signing key
-  squid/
+  squid/19.2/
     dists/bookworm/{Release,InRelease,Release.gpg}
     dists/bookworm/main/binary-{amd64,arm64}/Packages{,.gz,.xz}
     pool/bookworm/main/c/ceph/*.deb
     buildlogs/bookworm/*.{buildinfo,changes,build.xz}
     dists/trixie/... pool/trixie/...
-  tentacle/...
+  tentacle/20.2/...
+  umbrella/21.1/...                             pre-releases of the next release
 ```
+
+The series is `major.minor` of the Ceph version and is derived from it by
+`build`. `index`, `sign` and `publish` take `squid` (all its series) or
+`squid/19.2` as arguments.
 
 ## Requirements
 
@@ -155,7 +161,7 @@ and the built-in defaults are used.
 ```sh
 ./ceph-apt build 19.2.3 bookworm
 ./ceph-apt build 19.2.3 trixie
-./ceph-apt index                             # all releases, or: ./ceph-apt index squid
+./ceph-apt index                             # all series, or: ./ceph-apt index squid/19.2
 ./ceph-apt sign                              # with SIGNING_KEY from the config
 ./ceph-apt sign --key=<ID>                   # override the configured key for one run
 ./ceph-apt build 20.2.4 trixie --index       # build, index, and sign if SIGNING_KEY is set
@@ -215,7 +221,7 @@ OpenSSH client:
 2. Installs podman, git and rclone, clones the repository and runs
    `./ceph-apt image` and `./ceph-apt build` for each distribution.
 3. Uploads the new packages and build logs to S3, with the same layout as
-   `REPO_DIR` (`<release>/pool/…`, `<release>/buildlogs/…`).
+   `REPO_DIR` (`<release>/<series>/pool/…`, `<release>/<series>/buildlogs/…`).
 4. Deletes the server and the key, also when the build fails or you press
    Ctrl-C.
 
@@ -290,7 +296,7 @@ same `CEPH_APT_S3_*` credentials as `fetch-incoming`:
 
 ```sh
 ./ceph-apt publish                 # all releases
-./ceph-apt publish squid           # only re-index and re-sign squid
+./ceph-apt publish squid/19.2      # only re-index and re-sign squid 19.2
 ./ceph-apt publish --key=<ID>      # sign with another key
 ```
 
@@ -303,8 +309,8 @@ the bucket.
 apt clients need anonymous read access to the published prefix, e.g. through
 a bucket policy that allows `s3:GetObject` on `ceph-apt/repo/*`. With the
 default settings the repository is then reachable at
-`https://ceph-apt.nbg1.your-objectstorage.com/repo/<release>`. Clients use
-`https://ceph.apt.cytrinox.net/repo/<release>`, a proxy for the bucket that
+`https://ceph-apt.nbg1.your-objectstorage.com/repo/<release>/<series>`. Clients use
+`https://ceph.apt.cytrinox.net/repo/<release>/<series>`, a proxy for the bucket that
 redirects each request to a short-lived signed S3 URL, so the URL in
 README.md stays stable even if the storage moves. `incoming/` holds unsigned
 packages and does not need to be public.

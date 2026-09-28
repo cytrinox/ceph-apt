@@ -259,7 +259,8 @@ def check_not_built(version, dists, arch, build_opts, urls, access_key, secret_k
             continue
         release = option_value(build_opts, "--release", names[0])
         deb = f"ceph-common_{version}-1~{names[1]}u{rev}_{arch}.deb"
-        key = f"{release}/pool/{dist}/main/c/ceph/{deb}"
+        series = version.rsplit(".", 1)[0]
+        key = f"{release}/{series}/pool/{dist}/main/c/ceph/{deb}"
         for url in urls:
             if s3_request("HEAD", url, key, access_key, secret_key, region):
                 existing.append(f"{url.rstrip('/')}/{key}")
@@ -550,7 +551,8 @@ examples:
 
 BUILD_DESCRIPTION = """\
 Create a server, build Ceph <version> for each <dist> one after another,
-upload the packages and build logs to S3 and delete the server.
+upload the packages and build logs to S3 and delete the server. They land in
+<release>/<series>/ (e.g. squid/19.2/), one apt repository per Ceph series.
 
 Everything after -- is passed to ./ceph-apt build for every distribution,
 e.g. --rev N, --changelog TEXT, --jobs N or --with-dbg.

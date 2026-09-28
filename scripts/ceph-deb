@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 #
 # ceph-deb - build upstream Ceph releases as .deb packages and maintain an
-# apt repository with one sub-repository per Ceph release.
+# apt repository with one sub-repository per Ceph series (major.minor), e.g.
+# /repo/squid/19.2 or /repo/umbrella/21.1 for pre-releases.
 #
 # Runs inside the ceph-apt builder container. Expected mounts:
 #   /repo     apt repository root (read-write)
@@ -47,7 +48,8 @@ Commands:
       --changelog TEXT        Changelog entry text; repeat for more items
                               (default: "Rebuild of upstream Ceph <version>
                               for <codename>.")
-  index [release...]          Regenerate the (unsigned) apt metadata
+  index [release[/series]...] Regenerate the (unsigned) apt metadata, e.g.
+                              "index squid" or "index squid/19.2" (default: all)
   shell                       Start an interactive shell
   help                        Show this help
 
@@ -192,12 +194,15 @@ cmd_build() {
     [ -d "$REPO" ] || die "$REPO is not mounted"
     [ -d "$WORK" ] || die "$WORK is not mounted"
 
-    local codename tag arch debver pooldir builddir srcdir mode
+    local codename tag arch debver series repodir pooldir builddir srcdir mode
     codename=$(distro_codename)
     tag=$(distro_tag) || die "no version number known for $codename, add it to debian_version() in lib/releases.sh"
     arch=$(dpkg --print-architecture)
     debver="$version-1~${tag}u${rev}"
-    pooldir="$REPO/$release/pool/$codename/main/c/ceph"
+    # One repository per series, so users can stay on e.g. 19.2 or 21.1.
+    series=${version%.*}
+    repodir="$REPO/$release/$series"
+    pooldir="$repodir/pool/$codename/main/c/ceph"
     builddir="$WORK/build/ceph-$version-$tag-$arch"
     srcdir="$builddir/ceph-$version"
 
@@ -208,7 +213,7 @@ cmd_build() {
         mode=-B
     fi
 
-    log "Ceph $version ($release) for $codename/$arch as $debver, dpkg-buildpackage $mode"
+    log "Ceph $version ($release/$series) for $codename/$arch as $debver, dpkg-buildpackage $mode"
 
     if compgen -G "$pooldir/*_${debver}_${arch}.deb" > /dev/null && [ "$force" != 1 ]; then
         die "$debver for $arch is already in $pooldir (use --rev N+1 to rebuild, or --force)"
@@ -282,7 +287,7 @@ cmd_build() {
     done
     [ "$count" -gt 0 ] || die "no packages were produced"
 
-    local logdir="$REPO/$release/buildlogs/$codename"
+    local logdir="$repodir/buildlogs/$codename"
     mkdir -p "$logdir"
     for f in "$builddir"/*.buildinfo "$builddir"/*.changes; do
         [ -e "$f" ] && install -m 0644 "$f" "$logdir/"
@@ -298,18 +303,19 @@ cmd_build() {
 # index
 # ---------------------------------------------------------------------------
 
-# index_suite <release> <codename>
+# index_suite <release/series> <codename>
 index_suite() {
-    local release=$1 codename=$2 reldir="$REPO/$1"
+    local name=$1 codename=$2 reldir="$REPO/$1"
+    local release=${1%%/*} series=${1#*/}
     local new="$reldir/dists/.$codename.new" old="$reldir/dists/.$codename.old"
-    local db="$WORK/ftparchive/$release.db" dbopt=() arch dir
+    local db="$WORK/ftparchive/$release-$series.db" dbopt=() arch dir
 
     if [ -d "$WORK" ] && [ -w "$WORK" ]; then
         mkdir -p "$WORK/ftparchive"
         dbopt=(--db "$db")
     fi
 
-    log "Indexing $release/$codename"
+    log "Indexing $name/$codename"
     rm -rf "$new" "$old"
     for arch in $ARCHES; do
         dir="$new/main/binary-$arch"
@@ -322,12 +328,12 @@ index_suite() {
 
     apt-ftparchive \
         -o APT::FTPArchive::Release::Origin="$REPO_ORIGIN" \
-        -o APT::FTPArchive::Release::Label="$REPO_LABEL" \
+        -o APT::FTPArchive::Release::Label="$REPO_LABEL $series" \
         -o APT::FTPArchive::Release::Suite="$codename" \
         -o APT::FTPArchive::Release::Codename="$codename" \
         -o APT::FTPArchive::Release::Architectures="$ARCHES" \
         -o APT::FTPArchive::Release::Components=main \
-        -o APT::FTPArchive::Release::Description="Ceph $release packages for $codename" \
+        -o APT::FTPArchive::Release::Description="Ceph $release $series packages for $codename" \
         release "$new" > "$new.Release"
     mv "$new.Release" "$new/Release"
 
@@ -340,29 +346,35 @@ index_suite() {
 }
 
 cmd_index() {
-    local releases=() release codename pool
+    local args=() repos=() arg pool name codename
     while [ $# -gt 0 ]; do
         case "$1" in
             -*) die "unknown option $1" ;;
-            *) releases+=("$1") ;;
+            *) args+=("$1") ;;
         esac
         shift
     done
-    if [ ${#releases[@]} -eq 0 ]; then
-        for pool in "$REPO"/*/pool; do
-            [ -d "$pool" ] && releases+=("$(basename "$(dirname "$pool")")")
+    # The layout before series repositories had <release>/pool directly.
+    for pool in "$REPO"/*/pool; do
+        [ ! -d "$pool" ] || die "$pool uses the old layout without series, move it to $(dirname "$pool")/<major.minor>/"
+    done
+    [ ${#args[@]} -gt 0 ] || args=("*")
+    for arg in "${args[@]}"; do
+        [[ "$arg" == */* ]] || arg="$arg/*"
+        for pool in "$REPO"/$arg/pool; do
+            [ -d "$pool" ] && repos+=("${pool#"$REPO"/}")
         done
-    fi
-    [ ${#releases[@]} -gt 0 ] || die "nothing to index in $REPO"
+    done
+    [ ${#repos[@]} -gt 0 ] || die "nothing to index in $REPO${args:+ for ${args[*]}}"
 
-    for release in "${releases[@]}"; do
-        [ -d "$REPO/$release/pool" ] || die "$REPO/$release/pool does not exist"
-        for pool in "$REPO/$release"/pool/*/; do
+    for name in "${repos[@]}"; do
+        name=${name%/pool}
+        for pool in "$REPO/$name"/pool/*/; do
             [ -d "$pool" ] || continue
             codename=$(basename "$pool")
-            index_suite "$release" "$codename"
+            index_suite "$name" "$codename"
         done
-        fix_ownership "$REPO/$release"
+        fix_ownership "$REPO/${name%%/*}"
     done
     log "Done. The metadata is unsigned: run ./ceph-apt sign before uploading."
 }
