@@ -403,6 +403,27 @@ def follow_build(remote, log_path, max_hours):
             time.sleep(POLL_SECONDS)
 
 
+def changelog_identity(config):
+    """DEBFULLNAME and DEBEMAIL for the changelog entry: CEPH_APT_DEBFULLNAME /
+    CEPH_APT_DEBEMAIL, otherwise the values in ceph-apt.conf (the file
+    ./ceph-apt uses, see --config)."""
+    conf = Path(config or os.environ.get("CEPH_APT_CONF") or Path(__file__).resolve().parent / "ceph-apt.conf")
+    values = {}
+    if conf.is_file():
+        # ceph-apt.conf is sourced by bash, so let bash read it.
+        res = subprocess.run(["bash", "-c", '. "$1" >/dev/null && printf "%s\\0%s" "${DEBFULLNAME-}" "${DEBEMAIL-}"',
+                              "_", str(conf)], capture_output=True, text=True)
+        if res.returncode != 0:
+            raise Error(f"cannot read {conf}: {res.stderr.strip()}")
+        values = dict(zip(("DEBFULLNAME", "DEBEMAIL"), res.stdout.split("\0")))
+    elif config or os.environ.get("CEPH_APT_CONF"):
+        raise Error(f"config file {conf} not found")
+    for name in ("DEBFULLNAME", "DEBEMAIL"):
+        if os.environ.get(f"CEPH_APT_{name}"):
+            values[name] = os.environ[f"CEPH_APT_{name}"]
+    return {k: v for k, v in values.items() if v}, conf
+
+
 def cmd_build(args, build_opts):
     hc = HCloud(require_env("CEPH_APT_HCLOUD_TOKEN"))
     git_url = os.environ.get("CEPH_APT_GIT_URL", DEFAULT_GIT_URL)
@@ -410,9 +431,13 @@ def cmd_build(args, build_opts):
     env = rclone_env(s3_url, require_env("CEPH_APT_S3_ACCESS_KEY_ID"),
                      require_env("CEPH_APT_S3_SECRET_ACCESS_KEY"), os.environ.get("CEPH_APT_S3_REGION"))
     env.update(GIT_URL=git_url, GIT_URL_DISPLAY=strip_credentials(git_url), GIT_REF=args.ref or "")
-    for name in ("DEBFULLNAME", "DEBEMAIL"):
-        if os.environ.get(f"CEPH_APT_{name}"):
-            env[name] = os.environ[f"CEPH_APT_{name}"]
+    identity, conf = changelog_identity(args.config)
+    env.update(identity)
+    if len(identity) < 2:
+        print(f"WARNING: DEBFULLNAME/DEBEMAIL are not set in {conf} or CEPH_APT_DEB*, "
+              "the changelog entry will name 'ceph-apt <ceph-apt@localhost>'", file=sys.stderr, flush=True)
+    else:
+        log(f"Changelog entries by {identity['DEBFULLNAME']} <{identity['DEBEMAIL']}>")
 
     if not re.fullmatch(r"\d+\.\d+\.\d+", args.version):
         raise Error(f"invalid Ceph version {args.version!r}")
@@ -624,8 +649,8 @@ environment:
   CEPH_APT_GIT_URL               repository the server clones; include a read-only
                                  token for a private repository
                                  (default: {DEFAULT_GIT_URL})
-  CEPH_APT_DEBFULLNAME           name and email in the changelog entry (optional)
-  CEPH_APT_DEBEMAIL
+  CEPH_APT_DEBFULLNAME           name and email in the changelog entry (default:
+  CEPH_APT_DEBEMAIL              DEBFULLNAME/DEBEMAIL from ceph-apt.conf, see --config)
 """
 
 
@@ -661,6 +686,9 @@ def main(argv):
     b.add_argument("--image", default="debian-13", help="OS image of the server (default: %(default)s)")
     b.add_argument("--ref", help="branch or tag of the repository to build with "
                                  "(default: its default branch); push local changes first")
+    b.add_argument("--config", metavar="FILE",
+                   help="ceph-apt.conf to take DEBFULLNAME/DEBEMAIL from (default: CEPH_APT_CONF "
+                        "or ceph-apt.conf next to this script)")
     b.add_argument("--local-patches", action="store_true",
                    help="use the patches/ directory of this checkout instead of the cloned "
                         "one, to test patches before pushing them")

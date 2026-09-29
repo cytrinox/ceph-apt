@@ -246,7 +246,7 @@ export CEPH_APT_HCLOUD_TOKEN=…         # Hetzner Cloud API token (read & write
 export CEPH_APT_S3_ACCESS_KEY_ID=… CEPH_APT_S3_SECRET_ACCESS_KEY=…
 export CEPH_APT_GIT_URL=https://github.com/cytrinox/ceph-apt.git   # default in the script
 export CEPH_APT_S3_URL=https://nbg1.your-objectstorage.com/ceph-apt/incoming   # default in the script
-export CEPH_APT_DEBFULLNAME="Your Name" CEPH_APT_DEBEMAIL=you@example.org  # optional
+export CEPH_APT_DEBFULLNAME="Your Name" CEPH_APT_DEBEMAIL=you@example.org  # optional, default: DEBFULLNAME/DEBEMAIL from ceph-apt.conf
 
 ./ceph-apt-cloudbuild build cax41 19.2.6 bookworm trixie
 ./ceph-apt-cloudbuild build ccx43 19.2.6 trixie --location nbg1 -- --rev 2
