@@ -26,11 +26,11 @@ series: with the Squid 19.2 repository you get 19.2.x updates, but never
 their own. Each repository keeps every point release, so you can stay on a
 point release or go back to one.
 
-| Ceph series | Repository URL | Debian 12 (bookworm) | Debian 13 (trixie) | Debian 14 (forky) |
-|---|---|---|---|---|
-| Tentacle 20.2 | `https://ceph.apt.cytrinox.net/repo/tentacle/20.2` | ✓ | ✓ | – |
-| Squid 19.2 | `https://ceph.apt.cytrinox.net/repo/squid/19.2` | ✓ | ✓ | ✓ |
-| Reef 18.2 | `https://ceph.apt.cytrinox.net/repo/reef/18.2` | ✓ | ✓ | ✓ |
+| Ceph series | Repository URL | Debian 12 (bookworm) | Debian 13 (trixie) | Debian 14 (forky) | Point releases |
+|---|---|---|---|---|---|
+| Tentacle 20.2 | `https://ceph.apt.cytrinox.net/repo/tentacle/20.2` | ✓ | ✓ | – | 20.2.4 |
+| Squid 19.2 | `https://ceph.apt.cytrinox.net/repo/squid/19.2` | ✓ | ✓ | ✓ | 19.2.0–19.2.6 (trixie: 19.2.1–19.2.6) |
+| Reef 18.2 | `https://ceph.apt.cytrinox.net/repo/reef/18.2` | ✓ | ✓ | ✓ | 18.2.0 |
 
 Debian 14 (forky) is Debian's current testing release. Only `amd64` packages
 are published; `arm64` is not available yet. Debug (`-dbg`) packages are not
