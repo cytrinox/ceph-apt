@@ -1,0 +1,24 @@
+Description: rgw: build rgw_common without speculative devirtualization
+ GCC 16 speculatively devirtualizes handler->error_handler() in rgw_rest.cc
+ (rgw_common) and emits the inline RGWHandler_REST_{Bucket,Obj}_SWIFT
+ error_handler() methods, which call RGWSwiftWebsiteHandler::error_handler()
+ from rgw_rest_swift.cc (rgw_a). Executables link rgw_a before rgw_common, so
+ radosgw-admin and others fail with an undefined reference. Disable the
+ speculation for all of rgw_common, which rules out such references there.
+---
+--- a/src/rgw/CMakeLists.txt
++++ b/src/rgw/CMakeLists.txt
+@@ -280,6 +280,13 @@
+ 
+ add_library(rgw_common STATIC ${librgw_common_srcs})
+ 
++# GCC 16 speculatively devirtualizes calls such as handler->error_handler() in
++# rgw_rest.cc and emits inline methods from headers like rgw_rest_swift.h that
++# call into rgw_a. rgw_a comes before rgw_common on the link line, so linking
++# then fails with undefined references. Real calls from rgw_common into rgw_a
++# would fail with older compilers too, so disabling the speculation is enough.
++target_compile_options(rgw_common PRIVATE -fno-devirtualize-speculatively)
++
+ include(CheckCXXCompilerFlag)
+ check_cxx_compiler_flag("-Wimplicit-const-int-float-conversion"
+   COMPILER_SUPPORTS_WARN_IMPLICIT_CONST_INT_FLOAT_CONVERSION)

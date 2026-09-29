@@ -1,0 +1,35 @@
+Description: rocksdb: add missing <cstdint> includes for GCC 16
+ GCC no longer includes <cstdint> indirectly through other standard headers,
+ so these headers of the bundled rocksdb fail to compile on Debian forky.
+ Umbrella already includes it in blob_file_meta.h and trace_record.h.
+---
+--- a/src/rocksdb/include/rocksdb/trace_record_result.h
++++ b/src/rocksdb/include/rocksdb/trace_record_result.h
+@@ -5,6 +5,7 @@
+ 
+ #pragma once
+ 
++#include <cstdint>
+ #include <string>
+ #include <vector>
+ 
+--- a/src/rocksdb/include/rocksdb/utilities/replayer.h
++++ b/src/rocksdb/include/rocksdb/utilities/replayer.h
+@@ -6,6 +6,7 @@
+ #pragma once
+ #ifndef ROCKSDB_LITE
+ 
++#include <cstdint>
+ #include <functional>
+ #include <memory>
+ 
+--- a/src/rocksdb/utilities/transactions/lock/range/range_tree/lib/util/partitioned_counter.h
++++ b/src/rocksdb/utilities/transactions/lock/range/range_tree/lib/util/partitioned_counter.h
+@@ -127,6 +127,7 @@
+ #endif
+ 
+ #if 0
++#include <cstdint>
+ #include <pthread.h>
+ 
+ #include "fttypes.h"
