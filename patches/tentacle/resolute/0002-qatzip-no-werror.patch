@@ -1,0 +1,15 @@
+Description: qatzip: don't build with -Werror
+ GCC 15 in Ubuntu 26.04 may warn about variables that are set but never used in
+ the bundled qatzip, and -Werror turns that into a build failure.
+---
+--- a/src/qatzip/configure.ac
++++ b/src/qatzip/configure.ac
+@@ -211,7 +211,7 @@
+ 
+ #check for compile flags
+ AC_MSG_CHECKING([cflags])
+-CFLAGS+=' -Wall -Werror -std=gnu99 -pedantic \
++CFLAGS+=' -Wall -std=gnu99 -pedantic \
+           -fstack-protector-strong -fPIE -fPIC \
+           -fno-delete-null-pointer-checks -fwrapv'
+ AS_IF([test "x${CC}" = "xgcc"], [CFLAGS+=' -fno-strict-overflow'], [])
