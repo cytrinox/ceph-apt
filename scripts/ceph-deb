@@ -4,6 +4,11 @@
 # apt repository with one sub-repository per Ceph series (major.minor), e.g.
 # /repo/squid/19.2 or /repo/umbrella/21.1 for pre-releases.
 #
+# Every build also produces the source package (format 1.0: the upstream
+# tarball as .orig.tar.gz plus a .diff.gz with debian/ and the patches), and
+# the binary packages are built from it, so "apt-get source ceph" followed by
+# dpkg-buildpackage gives the same packages.
+#
 # Runs inside the ceph-apt builder container. Expected mounts:
 #   /repo     apt repository root (read-write)
 #   /work     tarball cache and build trees (read-write, ~60 GB free)
@@ -36,6 +41,8 @@ Usage: ceph-deb <command> [options]
 
 Commands:
   build <version> [options]   Download, build and add Ceph <version> to /repo
+                              (binary packages, and the source package when
+                              the arch:all packages are built, i.e. on amd64)
       --release NAME          Ceph release name (default: derived from version)
       --rev N                 Rebuild number, the uN in <version>-1~deb12uN
                               (default 1); bump it to rebuild a version that
@@ -96,11 +103,31 @@ fetch_tarball() {
 }
 
 # Drop the -dbg packages like upstream make-debs.sh does; they are several GB
-# and take a long time to build.
+# and take a long time to build. Without --dbg-package, dh_strip would build
+# automatic -dbgsym packages instead, which are just as big, so turn those off
+# in debian/rules too (rather than with DEB_BUILD_OPTIONS=noautodbgsym, which
+# is not part of the source package).
 strip_dbg_packages() {
     local srcdir=$1
     perl -ni -e 'print if(!(/^Package: .*-dbg$/../^$/))' "$srcdir/debian/control"
-    perl -pi -e 's/--dbg-package.*//' "$srcdir/debian/rules"
+    perl -pi -e 's/--dbg-package.*/--no-automatic-dbgsym/' "$srcdir/debian/rules"
+}
+
+# CMake 4 (forky and later) rejects cmake_minimum_required() < 3.5, which
+# bundled libraries like zstd still use. Export the policy minimum from
+# debian/rules, so it is part of the source package and reaches the nested
+# CMake runs of the bundled libraries; CMake 3.x ignores it. Called after the
+# patches, so their context in debian/rules stays as in the upstream tarball.
+set_cmake_policy_minimum() {
+    local rules=$1/debian/rules
+    grep -q '^export CMAKE_POLICY_VERSION_MINIMUM' "$rules" && return 0
+    grep -q '^include /usr/share/dpkg/default\.mk$' "$rules" \
+        || die "no 'include /usr/share/dpkg/default.mk' in debian/rules to add CMAKE_POLICY_VERSION_MINIMUM after"
+    perl -0pi -e 's{^(include /usr/share/dpkg/default\.mk\n)}{$1
+# CMake 4 rejects cmake_minimum_required() < 3.5, which bundled libraries like
+# zstd still use; CMake 3.x ignores this. Added by ceph-apt.
+export CMAKE_POLICY_VERSION_MINIMUM ?= 3.5
+}m' "$rules"
 }
 
 # The optional "Ceph-Version:" line in a patch header (before the first "---").
@@ -146,6 +173,24 @@ apply_patches() {
             patch -d "$srcdir" -p1 --forward --batch < "$p"
         done
     done
+}
+
+# build_source_package <tarball> <srcdir> <version> <debver>: builds the source
+# package next to <srcdir> and replaces <srcdir> with a fresh extraction of it,
+# so the binary packages are built from exactly the published source. Ceph's
+# debian/source/format is 1.0, so the patches outside debian/ end up in the
+# .diff.gz together with debian/.
+build_source_package() {
+    local tarball=$1 srcdir=$2 version=$3 debver=$4
+    local builddir name
+    builddir=$(dirname "$srcdir")
+    name=$(basename "$srcdir")
+    ln -f "$tarball" "$builddir/ceph_$version.orig.tar.gz" 2>/dev/null \
+        || cp "$tarball" "$builddir/ceph_$version.orig.tar.gz"
+    log "Building the source package ceph_$debver.dsc"
+    (cd "$builddir" && dpkg-source -b "$name")
+    rm -rf "$srcdir"
+    (cd "$builddir" && dpkg-source -x "ceph_$debver.dsc" "$name")
 }
 
 # apt-get build-dep names the package that can't be installed, unlike
@@ -221,6 +266,10 @@ cmd_build() {
 
     local tarball
     tarball=$(fetch_tarball "$version")
+    if [ "$mode" = -b ] && [ -e "$pooldir/ceph_$version.orig.tar.gz" ] \
+        && ! cmp -s "$tarball" "$pooldir/ceph_$version.orig.tar.gz"; then
+        die "$pooldir/ceph_$version.orig.tar.gz differs from $tarball"
+    fi
 
     log "Extracting into $builddir"
     rm -rf "$builddir"
@@ -231,6 +280,7 @@ cmd_build() {
 
     [ "$with_dbg" = 1 ] || strip_dbg_packages "$srcdir"
     apply_patches "$srcdir" "$release" "$codename" "$version"
+    set_cmake_policy_minimum "$srcdir"
 
     [ ${#changelog[@]} -gt 0 ] || changelog=("Rebuild of upstream Ceph $version for $codename.")
     (
@@ -243,6 +293,7 @@ cmd_build() {
         done
     )
 
+    build_source_package "$tarball" "$srcdir" "$version" "$debver"
     install_build_deps "$srcdir"
 
     if [ "$prepare_only" = 1 ]; then
@@ -250,14 +301,10 @@ cmd_build() {
         return 0
     fi
 
+    # Everything else that shapes the packages is in the source package, so
+    # dpkg-buildpackage on "apt-get source ceph" gives the same result.
     jobs=${jobs:-$(default_jobs)}
-    local opts="nocheck parallel=$jobs"
-    [ "$with_dbg" = 1 ] || opts="$opts noautodbgsym"
-    export DEB_BUILD_OPTIONS="$opts${DEB_BUILD_OPTIONS:+ $DEB_BUILD_OPTIONS}"
-    # CMake 4 (forky and later) rejects cmake_minimum_required() < 3.5, which
-    # bundled libraries like zstd still use. The variable is inherited by
-    # their nested CMake runs; CMake 3.x ignores it.
-    export CMAKE_POLICY_VERSION_MINIMUM=${CMAKE_POLICY_VERSION_MINIMUM:-3.5}
+    export DEB_BUILD_OPTIONS="nocheck parallel=$jobs${DEB_BUILD_OPTIONS:+ $DEB_BUILD_OPTIONS}"
     if [ -d /ccache ] && [ -w /ccache ]; then
         export CCACHE_DIR=/ccache CCACHE_BASEDIR="$WORK/build" CCACHE_NOHASHDIR=true
         export CCACHE_MAXSIZE=${CCACHE_MAXSIZE:-30G}
@@ -286,6 +333,28 @@ cmd_build() {
         count=$((count + 1))
     done
     [ "$count" -gt 0 ] || die "no packages were produced"
+
+    # The source package goes with the arch:all packages, so each exists once.
+    # All revisions share the .orig.tar.gz, which is the upstream tarball.
+    if [ "$mode" = -b ]; then
+        for f in "$builddir/ceph_$version.orig.tar.gz" "$builddir/ceph_$debver.dsc" \
+                 "$builddir/ceph_$debver.diff.gz"; do
+            [ -e "$f" ] || die "missing $(basename "$f") from the source package build"
+            name=$(basename "$f")
+            if [ -e "$pooldir/$name" ]; then
+                if cmp -s "$f" "$pooldir/$name"; then
+                    continue
+                elif [[ "$name" == *.orig.tar.gz ]]; then
+                    die "$pooldir/$name differs from the upstream tarball"
+                elif [ "$force" != 1 ]; then
+                    warn "keeping existing $name"
+                    continue
+                fi
+            fi
+            install -m 0644 "$f" "$pooldir/$name"
+        done
+        log "Added the source package ceph_$debver.dsc"
+    fi
 
     local logdir="$repodir/buildlogs/$codename"
     mkdir -p "$logdir"
@@ -325,6 +394,12 @@ index_suite() {
         gzip -9nk "$dir/Packages"
         xz -k "$dir/Packages"
     done
+    # For "apt-get source ceph" (deb-src); empty for builds without sources.
+    dir="$new/main/source"
+    mkdir -p "$dir"
+    (cd "$reldir" && apt-ftparchive "${dbopt[@]}" sources "pool/$codename") > "$dir/Sources"
+    gzip -9nk "$dir/Sources"
+    xz -k "$dir/Sources"
 
     apt-ftparchive \
         -o APT::FTPArchive::Release::Origin="$REPO_ORIGIN" \

@@ -167,9 +167,39 @@ with the rest of your Debian sources. The trixie packages (`…~deb13u1`) have
 higher version numbers than the bookworm ones (`…~deb12u1`), so they are
 upgraded as part of the distribution upgrade.
 
+## Building the packages yourself
+
+The repositories also contain the source packages, so you can rebuild the
+packages with the usual Debian tools. The binary packages in the repository
+are built from exactly these source packages.
+
+Add `deb-src` to the repository entry from step 2, i.e. `Types: deb deb-src`
+in `ceph-apt.sources`, or a second line in `ceph-apt.list`:
+
+```
+deb-src [signed-by=/usr/share/keyrings/ceph-apt.asc] https://ceph.apt.cytrinox.net/repo/tentacle/20.2 trixie main
+```
+
+Then, as a normal user:
+
+```sh
+sudo apt update
+sudo apt install dpkg-dev
+apt-cache showsrc ceph | grep ^Version     # available versions
+apt-get source ceph=20.2.4-1~deb13u1       # or just "ceph" for the newest
+sudo apt-get build-dep ./ceph-20.2.4
+cd ceph-20.2.4
+DEB_BUILD_OPTIONS="parallel=8" dpkg-buildpackage -b -us -uc
+```
+
+The `.deb` files end up in the parent directory. Ceph needs about 3 GB of RAM
+per compile job (set `parallel=` accordingly), about 60 GB of disk, and
+several hours on an 8-core machine.
+
 ## How the packages are built
 
 The packages are built from the unmodified upstream Ceph release tarballs,
 using the `debian/` packaging that ships with them. Changes are limited to
-build fixes, which are kept in [patches/](patches/). Building and publishing
-are described in [BUILD.md](BUILD.md).
+build fixes, which are kept in [patches/](patches/) and end up in the
+`.diff.gz` of the source package, together with the changelog entry. Building
+and publishing are described in [BUILD.md](BUILD.md).

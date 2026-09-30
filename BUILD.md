@@ -9,7 +9,7 @@ per Ceph series, `<release>/<major.minor>` (e.g. `squid/19.2`, or
 `umbrella/21.1` for pre-releases), and it keeps every point release built into
 it. Users of a series only get its point releases.
 
-- Distributions: Debian bookworm/trixie/forky, Ubuntu jammy/noble (any
+- Distributions: Debian bookworm/trixie/forky, Ubuntu jammy/noble/resolute (any
   `debian:`/`ubuntu:` base image should work)
 - Architectures: amd64 and arm64, each built natively on a host of that arch
 - Output: a static directory tree, published to S3 (e.g. Hetzner Object
@@ -21,10 +21,10 @@ it. Users of a series only get its point releases.
 download.ceph.com/tarballs/ceph-X.Y.Z.tar.gz
         │  ./ceph-apt build X.Y.Z <dist>      (container per dist, native arch)
         ▼
-repo/<release>/<series>/pool/<dist>/main/c/ceph/*.deb   (immutable, all versions kept)
+repo/<release>/<series>/pool/<dist>/main/c/ceph/*.{deb,dsc,diff.gz,orig.tar.gz}   (immutable, all versions kept)
         │  ./ceph-apt index                     (container, apt-ftparchive)
         ▼
-repo/<release>/<series>/dists/<dist>/{Release,main/binary-*/Packages}
+repo/<release>/<series>/dists/<dist>/{Release,main/binary-*/Packages,main/source/Sources}
         │  ./ceph-apt sign                      (host, your own gpg)
         ▼
 repo/<release>/<series>/dists/<dist>/{InRelease,Release.gpg}
@@ -34,9 +34,13 @@ S3 bucket → https://ceph.apt.cytrinox.net/repo/<release>/<series>
 ```
 
 - `build` uses the `debian/` directory that ships in the upstream release
-  tarball. It adds a changelog entry and installs the build dependencies
-  inside the container. It skips the `-dbg` packages (like upstream's
-  `make-debs.sh`), builds, and copies the `.deb`s into the pool.
+  tarball. It removes the `-dbg` packages (like upstream's `make-debs.sh`),
+  applies the patches and adds a changelog entry. From that tree it builds the
+  source package: the upstream tarball as `ceph_<version>.orig.tar.gz` plus a
+  `.diff.gz` with all changes (Ceph's `debian/source/format` is 1.0). It then
+  extracts the source package again, installs the build dependencies inside
+  the container, builds the binary packages from the extracted tree and copies
+  everything into the pool. See [Source packages](#source-packages).
 - `index` regenerates all metadata from the pool contents. It keeps no state,
   so you can merge pools from several hosts with rsync and index anywhere.
   The result is unsigned.
@@ -107,7 +111,9 @@ repo/
   squid/19.2/
     dists/bookworm/{Release,InRelease,Release.gpg}
     dists/bookworm/main/binary-{amd64,arm64}/Packages{,.gz,.xz}
+    dists/bookworm/main/source/Sources{,.gz,.xz}
     pool/bookworm/main/c/ceph/*.deb
+    pool/bookworm/main/c/ceph/ceph_*.{dsc,diff.gz,orig.tar.gz}
     buildlogs/bookworm/*.{buildinfo,changes,build.xz}
     dists/trixie/... pool/trixie/...
   tentacle/20.2/...
@@ -190,7 +196,29 @@ If a build fails, the build tree stays in `WORK_DIR/build/` and the log is at
 environment. Fixes go into [patches/](patches/README.md).
 
 `arch: all` packages (python modules, dashboards, cephadm, …) are built on the
-amd64 host only, so both architectures reference the same file.
+amd64 host only, so both architectures reference the same file. The same goes
+for the source package.
+
+### Source packages
+
+Everything that shapes the binary packages is part of the source package, so
+`apt-get source ceph` plus `dpkg-buildpackage -b` (see README.md) gives the
+same packages as `build`. Besides the patches, `build` makes these changes to
+`debian/` for that:
+
+- It exports `CMAKE_POLICY_VERSION_MINIMUM ?= 3.5` from `debian/rules`. CMake 4
+  (forky and later) rejects the `cmake_minimum_required()` of bundled
+  libraries such as zstd; CMake 3 ignores the variable.
+- It replaces `--dbg-package=…` in the `dh_strip` calls with
+  `--no-automatic-dbgsym`, so no `-dbgsym` packages are built either
+  (unless `--with-dbg`).
+
+The only build setting outside the source package is `DEB_BUILD_OPTIONS`
+(`nocheck parallel=N`). Upstream's `debian/rules` doesn't run the tests anyway.
+
+All revisions of a version share the `.orig.tar.gz`, which is the upstream
+tarball unchanged. `build` stops if the pool already has one with different
+content.
 
 ## Multiple build hosts (amd64 + arm64)
 
@@ -302,7 +330,7 @@ same `CEPH_APT_S3_*` credentials as `fetch-incoming`:
 
 `publish` runs `index` and `sign`, then uploads in three passes so that
 clients never see metadata that references missing files: first the packages
-(and build logs and the public key), then the `Packages` indexes, then the
+(and build logs and the public key), then the `Packages` and `Sources` indexes, then the
 signed `Release`, `InRelease` and `Release.gpg`. It never deletes anything in
 the bucket.
 
@@ -316,7 +344,9 @@ README.md stays stable even if the storage moves. `incoming/` holds unsigned
 packages and does not need to be public.
 
 Storage grows with every point release: about 1.2 GB per distribution and
-arch, without debug packages.
+arch, without debug packages, plus about 200–250 MB per distribution for the
+source package (mostly the `.orig.tar.gz`, which each distribution's pool has
+its own copy of).
 
 ## Using the repository
 
