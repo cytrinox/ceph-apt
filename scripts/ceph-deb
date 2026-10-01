@@ -113,6 +113,22 @@ strip_dbg_packages() {
     perl -pi -e 's/--dbg-package.*/--no-automatic-dbgsym/' "$srcdir/debian/rules"
 }
 
+# dh_dwz moves the debug info that several binaries share into a file below
+# /usr/lib/debug/.dwz/, which dh_strip only moves out of the package into a
+# -dbgsym package. With --no-automatic-dbgsym it would stay in the package,
+# so don't run dh_dwz when the debug packages are dropped. Tentacle and later
+# have a DWZ switch in debian/rules; Reef (debhelper compat 9) never runs it.
+# Called after the patches, like set_cmake_policy_minimum.
+disable_dwz() {
+    local rules=$1/debian/rules
+    if grep -q '^ifeq (\$(DWZ), false)' "$rules"; then
+        grep -q '^DWZ = false$' "$rules" \
+            || perl -0pi -e 's{^(ifeq \(\$\(DWZ\), false\))}{# No debug packages, see override_dh_strip. Added by ceph-apt.\nDWZ = false\n$1}m' "$rules"
+    elif ! grep -q '^override_dh_dwz:' "$rules"; then
+        printf '\n# No debug packages, see override_dh_strip. Added by ceph-apt.\noverride_dh_dwz:\n' >> "$rules"
+    fi
+}
+
 # CMake 4 (forky and later) rejects cmake_minimum_required() < 3.5, which
 # bundled libraries like zstd still use. Export the policy minimum from
 # debian/rules, so it is part of the source package and reaches the nested
@@ -281,6 +297,7 @@ cmd_build() {
     [ "$with_dbg" = 1 ] || strip_dbg_packages "$srcdir"
     apply_patches "$srcdir" "$release" "$codename" "$version"
     set_cmake_policy_minimum "$srcdir"
+    [ "$with_dbg" = 1 ] || disable_dwz "$srcdir"
 
     [ ${#changelog[@]} -gt 0 ] || changelog=("Rebuild of upstream Ceph $version for $codename.")
     (

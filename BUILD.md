@@ -211,7 +211,9 @@ same packages as `build`. Besides the patches, `build` makes these changes to
   libraries such as zstd; CMake 3 ignores the variable.
 - It replaces `--dbg-package=…` in the `dh_strip` calls with
   `--no-automatic-dbgsym`, so no `-dbgsym` packages are built either
-  (unless `--with-dbg`).
+  (unless `--with-dbg`). It also turns off `dh_dwz` (`DWZ = false`, or an
+  empty `override_dh_dwz:` for Squid): the shared debug info it collects in
+  `/usr/lib/debug/.dwz/` would otherwise stay in the packages.
 
 The only build setting outside the source package is `DEB_BUILD_OPTIONS`
 (`nocheck parallel=N`). Upstream's `debian/rules` doesn't run the tests anyway.
