@@ -1,0 +1,20 @@
+Description: Build without LTO on Ubuntu
+ Ubuntu 24.04 enables -flto=auto in its default build flags (Debian does
+ not). With LTO, libcls_lua.so fails to link with an undefined reference to
+ json_spirit::Value_impl<...>::get_str() (seen on Ubuntu 26.04), so disable
+ LTO like Ubuntu's own ceph package does.
+---
+--- a/debian/rules
++++ b/debian/rules
+@@ -3,6 +3,11 @@
+ export DH_VERBOSE=1
+ export DESTDIR=$(CURDIR)/debian/tmp
+ 
++# Ubuntu builds with -flto=auto by default. With LTO, libcls_lua.so fails to
++# link (undefined json_spirit::Value_impl<...>::get_str()), so build without
++# it, like Ubuntu's own ceph package.
++export DEB_BUILD_MAINT_OPTIONS = optimize=-lto
++
+ include /usr/share/dpkg/default.mk
+ 
+ ifneq (,$(findstring WITH_STATIC_LIBSTDCXX,$(CEPH_EXTRA_CMAKE_ARGS)))
