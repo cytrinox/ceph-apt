@@ -1,4 +1,4 @@
-# ceph-apt: Ceph packages for Debian
+# ceph-apt: Ceph packages for Debian and Ubuntu
 
 > [!WARNING]
 > **This project and its repositories are experimental. Do not use them for
@@ -9,8 +9,8 @@
 > removed or rebuilt, and there are no updates or security fixes you can rely
 > on.
 
-Apt repositories with [Ceph](https://ceph.io) packages for Debian, built from
-the upstream Ceph release tarballs. Base URL of the repositories:
+Apt repositories with [Ceph](https://ceph.io) packages for Debian and Ubuntu,
+built from the upstream Ceph release tarballs. Base URL of the repositories:
 
 **https://ceph.apt.cytrinox.net/repo/**
 
@@ -20,21 +20,30 @@ Foundation or the upstream Ceph packaging.
 ## What's available
 
 There is one repository per Ceph series (`major.minor`), e.g.
-`repo/squid/19.2`. A repository only contains the point releases of its
-series: with the Squid 19.2 repository you get 19.2.x updates, but never
-20.2. Pre-releases of a future Ceph release (e.g. 21.1.x) get a repository of
+`repo/tentacle/20.2`. A repository only contains the point releases of its
+series: with the Tentacle 20.2 repository you get 20.2.x updates, but never
+21.x. Pre-releases of a future Ceph release (e.g. 21.1.x) get a repository of
 their own. Each repository keeps every point release, so you can stay on a
 point release or go back to one.
 
-| Ceph series | Repository URL | Debian 12 (bookworm) | Debian 13 (trixie) | Debian 14 (forky) | Point releases |
-|---|---|---|---|---|---|
-| Tentacle 20.2 | `https://ceph.apt.cytrinox.net/repo/tentacle/20.2` | ✓ | ✓ | – | 20.2.4 |
-| Squid 19.2 | `https://ceph.apt.cytrinox.net/repo/squid/19.2` | ✓ | ✓ | ✓ | 19.2.0–19.2.6 (trixie: 19.2.1–19.2.6) |
-| Reef 18.2 | `https://ceph.apt.cytrinox.net/repo/reef/18.2` | ✓ | ✓ | ✓ | 18.2.0 |
+| Ceph series | Repository URL | Point releases |
+|---|---|---|
+| Tentacle 20.2 | `https://ceph.apt.cytrinox.net/repo/tentacle/20.2` | 20.2.0–20.2.4 |
+| Umbrella 21.1 (pre-release) | `https://ceph.apt.cytrinox.net/repo/umbrella/21.1` | 21.1.0–21.1.1 |
 
-Debian 14 (forky) is Debian's current testing release. Only `amd64` packages
-are published; `arm64` is not available yet. Debug (`-dbg`) packages are not
-provided.
+Distributions per series:
+
+| Ceph series | Debian 12 bookworm | Debian 13 trixie | Debian 14 forky | Ubuntu 22.04 jammy | Ubuntu 24.04 noble | Ubuntu 26.04 resolute |
+|---|---|---|---|---|---|---|
+| Tentacle 20.2 | ✓ | ✓ | ✓ | ✓ | ✓ | – |
+| Umbrella 21.1 | ✓ | ✓ | ✓ | – | ✓ | ✓ |
+
+All point releases of a series are available for each of its distributions.
+Umbrella 21.1 is a development series of the next Ceph release (21.2), not a
+stable release. Debian 14 (forky) is Debian's current testing release. Only
+`amd64` packages are published; `arm64` is not available yet. Debug (`-dbg`)
+packages are not provided. Source packages are, see
+[Building the packages yourself](#building-the-packages-yourself).
 
 ## Setup
 
@@ -57,7 +66,7 @@ F844 037D BE0E 9385 6475  B95A 9FDA 52CB 9EDE 279E
 
 ### 2. Add the repository
 
-This picks up your Debian release automatically:
+This picks up your Debian or Ubuntu release automatically:
 
 ```sh
 sudo tee /etc/apt/sources.list.d/ceph-apt.sources <<EOF
@@ -81,9 +90,10 @@ Use only one of the two files.
 Remove any other Ceph repositories (e.g. `download.ceph.com`) so packages from
 different sources don't get mixed.
 
-### 3. Prefer this repository over Debian's own Ceph packages
+### 3. Prefer this repository over the distribution's own Ceph packages
 
-Debian ships its own, older `ceph` packages, and backports may carry others.
+Debian and Ubuntu ship their own `ceph` packages, and backports (or Ubuntu's
+cloud archive) may carry others.
 Mixing them with these packages breaks dependencies, so give this repository
 priority:
 
@@ -99,7 +109,7 @@ EOF
 
 ```sh
 sudo apt update
-apt policy ceph-common           # candidate should be …~deb12u1 / …~deb13u1
+apt policy ceph-common           # candidate should be …~deb13u1, …~ubuntu24.04u1, …
 sudo apt install ceph-common     # client tools
 sudo apt install ceph            # mon, mgr, osd
 ```
@@ -109,9 +119,10 @@ sudo apt install ceph            # mon, mgr, osd
 Package versions look like this:
 
 ```
-19.2.3-1~deb12u1
+20.2.4-1~deb12u1
 │      │ │    └─ rebuild number (bumped when a version is rebuilt)
-│      │ └────── Debian release: deb12 = bookworm, deb13 = trixie
+│      │ └────── distribution: deb12 = bookworm, deb13 = trixie, deb14 = forky,
+│      │         ubuntu22.04 = jammy, ubuntu24.04 = noble, ubuntu26.04 = resolute
 │      └──────── upstream packaging revision
 └─────────────── Ceph version
 ```
@@ -130,16 +141,16 @@ pin. It has a higher priority than the repository pin from step 3:
 ```sh
 sudo tee /etc/apt/preferences.d/ceph-apt-version.pref <<'EOF'
 Package: /^(ceph|libcephfs|librados|librbd|librgw|libsqlite3-mod-ceph|python3-(ceph|rados|rbd|rgw)|rados|rbd-)/
-Pin: version 19.2.2-1~*
+Pin: version 20.2.3-1~*
 Pin-Priority: 1002
 EOF
 sudo apt update
-apt policy ceph-common           # candidate is now 19.2.2-1~…
+apt policy ceph-common           # candidate is now 20.2.3-1~…
 ```
 
 The `Package:` pattern covers all Ceph packages. apt doesn't allow
 `Package: *` together with a version pin. Packages from other sources are not
-affected, because they don't have a `19.2.2-1~…` version.
+affected, because they don't have a `20.2.3-1~…` version.
 
 If the pinned version is older than what's installed, `apt upgrade` offers a
 downgrade (and refuses under `-y` without `--allow-downgrades`). Ceph doesn't
@@ -149,23 +160,26 @@ release again.
 
 ## Upgrading
 
-### To the next Ceph release (e.g. Squid → Tentacle)
+### To the next Ceph release (e.g. Tentacle → Umbrella)
 
 1. Read the [Ceph release notes](https://docs.ceph.com/en/latest/releases/)
    for the supported upgrade paths and the required order (usually mons, then
    mgrs, OSDs, MDS, RGW).
 2. Change the URL in `/etc/apt/sources.list.d/ceph-apt.sources` (or
-   `ceph-apt.list`) from `…/squid/19.2` to `…/tentacle/20.2`.
+   `ceph-apt.list`) to the new series, e.g. from `…/tentacle/20.2` to
+   `…/umbrella/21.2` once the stable Umbrella release is available.
 3. `sudo apt update && sudo apt full-upgrade` on each node, in the order the
    release notes describe, and restart the daemons.
 
-### To the next Debian release (bookworm → trixie)
+### To the next distribution release (e.g. bookworm → trixie, noble → resolute)
 
 Change the suite in `/etc/apt/sources.list.d/ceph-apt.sources` (`Suites:`) or
-`ceph-apt.list` (the word after the URL) from `bookworm` to `trixie`, together
-with the rest of your Debian sources. The trixie packages (`…~deb13u1`) have
-higher version numbers than the bookworm ones (`…~deb12u1`), so they are
-upgraded as part of the distribution upgrade.
+`ceph-apt.list` (the word after the URL), e.g. from `bookworm` to `trixie`,
+together with the rest of your sources. The packages for the newer release
+(`…~deb13u1`, `…~ubuntu26.04u1`) have higher version numbers than the older
+ones (`…~deb12u1`, `…~ubuntu24.04u1`), so they are upgraded as part of the
+distribution upgrade. Check the table above that your series is available for
+the new release.
 
 ## Building the packages yourself
 
