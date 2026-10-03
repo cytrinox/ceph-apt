@@ -1,0 +1,56 @@
+Description: pybind: use importlib instead of pkgutil.find_loader()
+ Python 3.14 (Ubuntu 26.04) removed pkgutil.find_loader(), so building the
+ Python bindings fails. Use importlib.util.find_spec() like tentacle does.
+---
+--- a/src/pybind/cephfs/setup.py
++++ b/src/pybind/cephfs/setup.py
+@@ -1,11 +1,11 @@
+ import os
+-import pkgutil
++import importlib.util
+ import shutil
+ import subprocess
+ import sys
+ import tempfile
+ import textwrap
+-if not pkgutil.find_loader('setuptools'):
++if not importlib.util.find_spec('setuptools'):
+     from distutils.core import setup
+     from distutils.extension import Extension
+ else:
+--- a/src/pybind/rados/setup.py
++++ b/src/pybind/rados/setup.py
+@@ -1,5 +1,5 @@
+-import pkgutil
+-if not pkgutil.find_loader('setuptools'):
++import importlib.util
++if not importlib.util.find_spec('setuptools'):
+     from distutils.core import setup
+     from distutils.extension import Extension
+ else:
+--- a/src/pybind/rbd/setup.py
++++ b/src/pybind/rbd/setup.py
+@@ -1,11 +1,11 @@
+ import os
+-import pkgutil
++import importlib.util
+ import shutil
+ import subprocess
+ import sys
+ import tempfile
+ import textwrap
+-if not pkgutil.find_loader('setuptools'):
++if not importlib.util.find_spec('setuptools'):
+     from distutils.core import setup
+     from distutils.extension import Extension
+ else:
+--- a/src/pybind/rgw/setup.py
++++ b/src/pybind/rgw/setup.py
+@@ -1,5 +1,5 @@
+-import pkgutil
+-if not pkgutil.find_loader('setuptools'):
++import importlib.util
++if not importlib.util.find_spec('setuptools'):
+     from distutils.core import setup
+     from distutils.extension import Extension
+ else:
