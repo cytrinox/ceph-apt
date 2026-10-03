@@ -1,0 +1,24 @@
+Description: cmake: leave _FORTIFY_SOURCE to the build flags (backport from 19.2.4)
+ src/CMakeLists.txt adds -D_FORTIFY_SOURCE=2, while Ubuntu 24.04 passes
+ -D_FORTIFY_SOURCE=3 in its default build flags. The bundled googletest
+ builds with -Werror, so the redefinition fails the build. Squid 19.2.4 and
+ Tentacle removed the block; do the same.
+Ceph-Version: < 19.2.4
+---
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -178,14 +178,6 @@
+ 
+ include(CheckCCompilerFlag)
+ if(CMAKE_CXX_COMPILER_ID STREQUAL GNU)
+-  CHECK_C_COMPILER_FLAG("-U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=2" HAS_FORTIFY_SOURCE)
+-  if(NOT CMAKE_BUILD_TYPE STREQUAL Debug)
+-    if(HAS_FORTIFY_SOURCE)
+-      add_definitions(
+-        -U_FORTIFY_SOURCE
+-        -D_FORTIFY_SOURCE=2)
+-    endif()
+-  endif()
+     CHECK_C_COMPILER_FLAG(-fstack-protector-strong HAS_STACK_PROTECT)
+     if (HAS_STACK_PROTECT)
+       add_compile_options(-fstack-protector-strong)
