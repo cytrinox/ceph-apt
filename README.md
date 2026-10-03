@@ -36,8 +36,8 @@ Distributions per series:
 
 | Ceph series | Debian 12 bookworm | Debian 13 trixie | Debian 14 forky | Ubuntu 22.04 jammy | Ubuntu 24.04 noble | Ubuntu 26.04 resolute |
 |---|---|---|---|---|---|---|
-| Squid 19.2 | ✓ | ✓ | ✓ | ✓ | ✓ | – |
-| Tentacle 20.2 | ✓ | ✓ | ✓ | ✓ | ✓ | – |
+| Squid 19.2 | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Tentacle 20.2 | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Umbrella 21.1 | ✓ | ✓ | ✓ | – | ✓ | ✓ |
 
 All point releases of a series are available for each of its distributions.
