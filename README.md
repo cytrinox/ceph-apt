@@ -28,6 +28,7 @@ point release or go back to one.
 
 | Ceph series | Repository URL | Point releases |
 |---|---|---|
+| Squid 19.2 | `https://ceph.apt.cytrinox.net/repo/squid/19.2` | 19.2.0–19.2.6 |
 | Tentacle 20.2 | `https://ceph.apt.cytrinox.net/repo/tentacle/20.2` | 20.2.0–20.2.4 |
 | Umbrella 21.1 (pre-release) | `https://ceph.apt.cytrinox.net/repo/umbrella/21.1` | 21.1.0–21.1.1 |
 
@@ -35,6 +36,7 @@ Distributions per series:
 
 | Ceph series | Debian 12 bookworm | Debian 13 trixie | Debian 14 forky | Ubuntu 22.04 jammy | Ubuntu 24.04 noble | Ubuntu 26.04 resolute |
 |---|---|---|---|---|---|---|
+| Squid 19.2 | ✓ | ✓ | ✓ | ✓ | ✓ | – |
 | Tentacle 20.2 | ✓ | ✓ | ✓ | ✓ | ✓ | – |
 | Umbrella 21.1 | ✓ | ✓ | ✓ | – | ✓ | ✓ |
 
@@ -160,14 +162,14 @@ release again.
 
 ## Upgrading
 
-### To the next Ceph release (e.g. Tentacle → Umbrella)
+### To the next Ceph release (e.g. Squid → Tentacle)
 
 1. Read the [Ceph release notes](https://docs.ceph.com/en/latest/releases/)
    for the supported upgrade paths and the required order (usually mons, then
    mgrs, OSDs, MDS, RGW).
 2. Change the URL in `/etc/apt/sources.list.d/ceph-apt.sources` (or
-   `ceph-apt.list`) to the new series, e.g. from `…/tentacle/20.2` to
-   `…/umbrella/21.2` once the stable Umbrella release is available.
+   `ceph-apt.list`) to the new series, e.g. from `…/squid/19.2` to
+   `…/tentacle/20.2`.
 3. `sudo apt update && sudo apt full-upgrade` on each node, in the order the
    release notes describe, and restart the daemons.
 
