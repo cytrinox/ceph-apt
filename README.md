@@ -38,7 +38,7 @@ Distributions per series:
 |---|---|---|---|---|---|---|
 | Squid 19.2 | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Tentacle 20.2 | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Umbrella 21.1 | ✓ | ✓ | ✓ | – | ✓ | ✓ |
+| Umbrella 21.1 | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 
 All point releases of a series are available for each of its distributions.
 Umbrella 21.1 is a development series of the next Ceph release (21.2), not a
