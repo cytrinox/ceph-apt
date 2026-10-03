@@ -1,0 +1,27 @@
+Description: arrow: always use the system thrift
+ With thrift < 0.17 (Ubuntu 22.04 has 0.16), Umbrella builds Arrow with a
+ bundled static thrift but never links it, so libparquet.a falls back to the
+ system libthrift.so. That comes earlier on the link line and is dropped by
+ --as-needed: "DSO missing from command line" for ceph_test_rgw_d4n_filter.
+ Use the system thrift as interface library like Tentacle does, which builds
+ on Ubuntu 22.04.
+---
+--- a/cmake/modules/BuildArrow.cmake
++++ b/cmake/modules/BuildArrow.cmake
+@@ -20,13 +20,9 @@
+     -DARROW_MIMALLOC=OFF)
+ 
+   # transitive dependencies
+-  if (thrift_VERSION VERSION_GREATER_EQUAL 0.17)
+-    # build arrow with system thrift, and include the transitive dependency on the Arrow::Arrow target
+-    list(APPEND arrow_INTERFACE_LINK_LIBRARIES thrift)
+-  else()
+-    # build arrow with bundled thrift to work around missing boost dependency
+-    list(APPEND arrow_CMAKE_ARGS -DThrift_SOURCE=BUNDLED -DARROW_THRIFT_USE_SHARED=OFF)
+-  endif()
++  # build arrow with system thrift, and include the transitive dependency on
++  # the Arrow::Arrow target (as tentacle does, also with thrift < 0.17)
++  list(APPEND arrow_INTERFACE_LINK_LIBRARIES thrift)
+ 
+   if (NOT WITH_SYSTEM_UTF8PROC)
+     # forward utf8proc_ROOT from build_utf8proc()
