@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-only
 # Build environment for Ceph .deb packages.
 #
 # One image per distribution release, built natively on each architecture:

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-only
 #
 # ceph-apt - host-side wrapper around the ceph-apt builder container.
 #

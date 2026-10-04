@@ -1,4 +1,5 @@
 # shellcheck shell=bash
+# SPDX-License-Identifier: GPL-3.0-only
 # Helpers shared by ceph-deb: Ceph release names and distro version tags.
 
 # ceph_release_name <version>  ->  squid, tentacle, ...

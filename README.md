@@ -210,3 +210,15 @@ using the `debian/` packaging that ships with them. Changes are limited to
 build fixes, which are kept in [patches/](patches/) and end up in the
 `.diff.gz` of the source package, together with the changelog entry. Building
 and publishing are described in [BUILD.md](BUILD.md).
+
+## License
+
+The tooling in this repository (scripts, Containerfile, documentation) is
+licensed under the [GNU General Public License v3.0](LICENSE)
+(`GPL-3.0-only`).
+
+The patches in [patches/](patches/) modify Ceph and its bundled libraries,
+and the packages are built from Ceph. Both are covered by the licenses of the
+code they apply to; see Ceph's
+[COPYING](https://github.com/ceph/ceph/blob/main/COPYING) and
+`/usr/share/doc/<package>/copyright` in the packages.

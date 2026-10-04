@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-only
 #
 # ceph-deb - build upstream Ceph releases as .deb packages and maintain an
 # apt repository with one sub-repository per Ceph series (major.minor), e.g.

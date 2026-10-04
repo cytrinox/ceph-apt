@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-only
 # Copy to ceph-apt.conf and adjust. Sourced by ./ceph-apt (bash syntax).
 
 # The apt repository: one sub-directory per Ceph series (squid/19.2/, ...).

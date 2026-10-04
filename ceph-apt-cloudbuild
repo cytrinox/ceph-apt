@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-only
 """ceph-apt-cloudbuild - build Ceph packages on a temporary Hetzner Cloud server.
 
 Run ./ceph-apt-cloudbuild --help and ./ceph-apt-cloudbuild build --help for
