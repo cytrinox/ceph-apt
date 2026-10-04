@@ -1,14 +1,5 @@
 # ceph-apt: Ceph packages for Debian and Ubuntu
 
-> [!WARNING]
-> **This project and its repositories are experimental. Do not use them for
-> production systems or any data you care about.**
->
-> Packages, URLs, the signing key, version numbering and the repository layout
-> may change or disappear at any time, without notice. Packages may be
-> removed or rebuilt, and there are no updates or security fixes you can rely
-> on.
-
 Apt repositories with [Ceph](https://ceph.io) packages for Debian and Ubuntu,
 built from the upstream Ceph release tarballs. Base URL of the repositories:
 
