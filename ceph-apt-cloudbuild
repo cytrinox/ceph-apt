@@ -56,6 +56,10 @@ cloud-init status --wait > /dev/null 2>&1 || true
 log "Installing podman, catatonit, git and rclone"
 apt-get update -q
 apt-get install -y -q --no-install-recommends ca-certificates catatonit git podman rclone
+if [ -n "${TARGET_ARCH:-}" ] && [ "$TARGET_ARCH" != "$(dpkg --print-architecture)" ]; then
+    log "Emulating $TARGET_ARCH with qemu-user"
+    apt-get install -y -q --no-install-recommends qemu-user-binfmt
+fi
 
 log "Checking the S3 upload"
 echo check > /tmp/upload-check
@@ -75,6 +79,7 @@ cat > ceph-apt.conf <<EOF
 REPO_DIR=$REPO
 WORK_DIR=/srv/ceph-apt/work
 CACHE_DIR=/srv/ceph-apt/ccache
+TARGET_ARCH=${TARGET_ARCH:-}
 EOF
 
 version=$1
@@ -453,7 +458,13 @@ def cmd_build(args, build_opts):
     types = hc.request("GET", f"/server_types?name={urllib.parse.quote(args.server_type)}")["server_types"]
     if not types:
         raise Error(f"unknown Hetzner server type {args.server_type!r}")
-    arch = {"x86": "amd64", "arm": "arm64"}.get(types[0].get("architecture"), "amd64")
+    server_arch = {"x86": "amd64", "arm": "arm64"}.get(types[0].get("architecture"), "amd64")
+    arch = args.arch or server_arch
+    if arch != server_arch:
+        log(f"{arch} is emulated with qemu-user on this {server_arch} server, "
+            "expect the build to take several times longer")
+    max_hours = args.max_hours or (48 if arch != server_arch else 12)
+    env["TARGET_ARCH"] = arch
     check_git(git_url, args.ref)
     s3_auth = (os.environ["CEPH_APT_S3_ACCESS_KEY_ID"], os.environ["CEPH_APT_S3_SECRET_ACCESS_KEY"],
                os.environ.get("CEPH_APT_S3_REGION"))
@@ -508,7 +519,7 @@ def cmd_build(args, build_opts):
                    f" /bin/bash /root/ceph-apt-build.sh {args_str}")
         log(f"Build started, full log: {log_path}")
 
-        ok = follow_build(remote, log_path, args.max_hours)
+        ok = follow_build(remote, log_path, max_hours)
     except KeyboardInterrupt:
         print("\nInterrupted", flush=True)
     finally:
@@ -598,6 +609,8 @@ checkout. The terminal shows the build steps; the full log is written to
 SERVER_TYPES_HELP = """
 server types (32 GB RAM or more recommended):
   cax41   arm64, 16 cores, 32 GB
+  (--arch arm64 on an amd64 type builds arm64 emulated with qemu-user,
+  several times slower than natively)
   cpx62   amd64, 16 shared cores, 32 GB      about 1 h per distribution
   ccx43   amd64, 16 dedicated cores, 64 GB
   ccx63   amd64, 48 dedicated cores, 192 GB  about 20 min per distribution
@@ -613,6 +626,9 @@ examples:
 
   # the same for arm64; run it at the same time from a second shell
   ./ceph-apt-cloudbuild build cax41 19.2.6 bookworm trixie
+
+  # arm64 without a cax server: emulated with qemu-user on an amd64 one
+  ./ceph-apt-cloudbuild build ccx63 19.2.6 trixie --arch arm64
 
   # Tentacle 20.2.4 on a fast server in the bucket's location
   ./ceph-apt-cloudbuild build ccx63 20.2.4 trixie forky --location nbg1
@@ -677,7 +693,7 @@ def main(argv):
         usage="%(prog)s [options] server_type version dist [dist ...] [-- ceph-apt build options]")
     b.add_argument("server_type",
                    help="Hetzner server type; its architecture decides what is built "
-                        "(cax* = arm64, cpx*/ccx* = amd64)")
+                        "(cax* = arm64, cpx*/ccx* = amd64) unless --arch is given")
     b.add_argument("version", help="Ceph version, e.g. 19.2.6 or 20.2.4")
     b.add_argument("dists", nargs="+", metavar="dist",
                    help="one or more distributions, built one after another: "
@@ -693,8 +709,12 @@ def main(argv):
     b.add_argument("--local-patches", action="store_true",
                    help="use the patches/ directory of this checkout instead of the cloned "
                         "one, to test patches before pushing them")
-    b.add_argument("--max-hours", type=float, default=12,
-                   help="give up and delete the server after this many hours (default: %(default)g)")
+    b.add_argument("--arch", choices=["amd64", "arm64"],
+                   help="architecture to build (default: the server's); a different one "
+                        "is emulated with qemu-user, e.g. arm64 on a ccx type")
+    b.add_argument("--max-hours", type=float,
+                   help="give up and delete the server after this many hours "
+                        "(default: 12, or 48 with an emulated --arch)")
     b.add_argument("--keep", action="store_true", help="keep the server after the build")
     b.add_argument("--keep-on-failure", action="store_true",
                    help="keep the server if a build fails, to inspect it over SSH")

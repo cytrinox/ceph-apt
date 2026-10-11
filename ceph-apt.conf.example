@@ -39,6 +39,10 @@ SIGNING_KEY=<fingerprint>
 # Image used for `index` (any built image works, the host arch does not matter).
 #INDEX_DIST=bookworm
 
+# Build for another architecture than the host's, emulated with qemu-user
+# (needs qemu-user-binfmt, several times slower). Same as --arch.
+#TARGET_ARCH=arm64
+
 # Container engine: podman (preferred) or docker. Auto-detected if unset.
 #ENGINE=podman
 #IMAGE=localhost/ceph-apt-builder

@@ -11,7 +11,8 @@ it. Users of a series only get its point releases.
 
 - Distributions: Debian bookworm/trixie/forky, Ubuntu jammy/noble/resolute (any
   `debian:`/`ubuntu:` base image should work)
-- Architectures: amd64 and arm64, each built natively on a host of that arch
+- Architectures: amd64 and arm64, built natively on a host of that arch, or
+  arm64 emulated with qemu-user on amd64
 - Output: a static directory tree, published to S3 (e.g. Hetzner Object
   Storage) and served from there
 
@@ -241,6 +242,39 @@ rsync -a --ignore-existing --exclude dists/ arm64-host:/srv/ceph-apt/repo/ /srv/
 ./ceph-apt sign
 ```
 
+## Building arm64 on an amd64 host (emulated)
+
+Without an arm64 machine, arm64 packages can be built on amd64 with
+qemu-user: the builder container is a real arm64 Debian or Ubuntu, and the
+kernel runs its programs through `qemu-aarch64` (binfmt_misc). `ceph-deb`
+sees an arm64 system and builds exactly as on a native arm64 host
+(`dpkg-buildpackage -B`: no arch:all and no source package). No VM is needed.
+
+The host needs qemu-user registered with the `F` (fix-binary) flag, so that it
+also works inside containers. Debian's and Ubuntu's `qemu-user-binfmt` does
+that:
+
+```sh
+sudo apt install qemu-user-binfmt
+cat /proc/sys/fs/binfmt_misc/qemu-aarch64    # "enabled", flags containing F
+```
+
+Then pass `--arch arm64` (or set `TARGET_ARCH=arm64` in `ceph-apt.conf`):
+
+```sh
+./ceph-apt --arch arm64 image trixie                 # localhost/ceph-apt-builder:trixie-arm64
+./ceph-apt --arch arm64 build 19.2.6 trixie --index  # index itself runs natively
+./ceph-apt --arch arm64 shell trixie
+```
+
+- The images for a foreign architecture get it as a tag suffix
+  (`trixie-arm64`), and the ccache has its own directory (`trixie-arm64`), so
+  native and emulated builds don't mix.
+- Emulation is CPU bound and much slower than a native build, probably 5–10×
+  (not measured yet). Use a machine with many cores.
+- As with a native arm64 host, the arch:all packages and the source package
+  come from the amd64 build of the same version and `--rev`.
+
 ## Building on Hetzner Cloud
 
 `./ceph-apt-cloudbuild` builds on a temporary Hetzner Cloud server, so no build
@@ -270,6 +304,12 @@ The server type decides the architecture: `cax*` (Ampere) builds arm64,
 `cpx*`/`ccx*` build amd64. Pick one with at least 32 GB RAM, e.g. `cax41`
 or `ccx43`. The server starts without a ccache, so every build is a full
 build.
+
+`--arch arm64` on an amd64 type builds arm64 emulated with qemu-user (see
+[above](#building-arm64-on-an-amd64-host-emulated)), e.g. when no `cax`
+servers are available. The script installs `qemu-user-binfmt` on the server
+and raises the default `--max-hours` from 12 to 48. Expect several hours per
+distribution even on a `ccx63`.
 
 ```sh
 export CEPH_APT_HCLOUD_TOKEN=…         # Hetzner Cloud API token (read & write)

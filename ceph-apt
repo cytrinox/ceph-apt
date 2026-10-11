@@ -14,6 +14,9 @@
 #                                             index, sign and upload the repo
 #                                             to CEPH_APT_S3_PUBLISH_URL
 #   ./ceph-apt shell bookworm                 debug shell in the builder
+#   ./ceph-apt --arch arm64 build 19.2.6 trixie
+#                                             build arm64 packages on an amd64
+#                                             host, emulated with qemu-user
 #
 # The repository has one apt repository per Ceph series (major.minor), e.g.
 # REPO_DIR/squid/19.2 or REPO_DIR/umbrella/21.1; "squid" alone means all of
@@ -22,6 +25,11 @@
 # Global options (before the command):
 #   -c, --config FILE use FILE instead of ./ceph-apt.conf
 #                     (or set CEPH_APT_CONF=FILE)
+#   --arch ARCH       build for ARCH (amd64 or arm64) instead of the host's
+#                     architecture (or set TARGET_ARCH). A foreign ARCH runs
+#                     emulated with qemu-user, which needs qemu-user-binfmt
+#                     and is several times slower. Applies to image, build
+#                     and shell; index always runs natively.
 #
 # Build options:
 #   --rev N           rebuild number, the uN in 19.2.3-1~deb12uN (default 1).
@@ -44,10 +52,13 @@ die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
 HERE=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
 CONF=${CEPH_APT_CONF:-}
+ARCH_OPT=
 while [ $# -gt 0 ]; do
     case "$1" in
         -c|--config) [ $# -ge 2 ] || die "$1 needs a file"; CONF=$2; shift 2 ;;
         --config=*) CONF=${1#--config=}; shift ;;
+        --arch) [ $# -ge 2 ] || die "$1 needs an architecture"; ARCH_OPT=$2; shift 2 ;;
+        --arch=*) ARCH_OPT=${1#--arch=}; shift ;;
         *) break ;;
     esac
 done
@@ -101,6 +112,38 @@ host_arch() {
     esac
 }
 
+# The architecture to build for: --arch, then TARGET_ARCH, then the host's.
+TARGET_ARCH=${ARCH_OPT:-${TARGET_ARCH:-$(host_arch)}}
+BINFMT_DIR=${BINFMT_DIR:-/proc/sys/fs/binfmt_misc}
+
+# check_arch <arch>: dies unless <arch> runs here, natively or through
+# qemu-user. Containers need the binfmt entry's F flag (fix-binary), which
+# Debian's and Ubuntu's qemu-user-binfmt set.
+check_arch() {
+    local arch=$1 qemu entry
+    case "$arch" in
+        amd64) qemu=x86_64 ;;
+        arm64) qemu=aarch64 ;;
+        *) die "unsupported architecture '$arch' (supported: amd64 arm64)" ;;
+    esac
+    [ "$arch" != "$(host_arch)" ] || return 0
+    entry=$BINFMT_DIR/qemu-$qemu
+    if [ ! -r "$entry" ] || ! grep -qx enabled "$entry" || ! grep -q '^flags:.*F' "$entry"; then
+        die "building $arch on $(host_arch) needs qemu-user registered with binfmt_misc" \
+            "(flag F, see $entry); on Debian/Ubuntu: apt install qemu-user-binfmt"
+    fi
+}
+
+# image_tag <dist> <arch>: the builder image; images for a foreign
+# architecture carry it as a suffix (localhost/ceph-apt-builder:trixie-arm64).
+image_tag() {
+    if [ "$2" = "$(host_arch)" ]; then
+        echo "$IMAGE:$1"
+    else
+        echo "$IMAGE:$1-$2"
+    fi
+}
+
 # vol <host> <container> [ro]
 vol() {
     local opts=${3:-}
@@ -109,11 +152,14 @@ vol() {
 }
 
 # run <dist> [engine run args...] -- <ceph-deb args...>
+# Uses the image for RUN_ARCH (default: TARGET_ARCH).
 run() {
-    local dist=$1 args=() v
+    local dist=$1 arch=${RUN_ARCH:-$TARGET_ARCH} args=() v
     shift
     base_image "$dist" > /dev/null
     [ -n "$ENGINE" ] || die "neither podman nor docker found"
+    check_arch "$arch"
+    [ "$arch" = "$(host_arch)" ] || args+=(--platform "linux/$arch")
     mkdir -p "$REPO_DIR" "$WORK_DIR"
     while [ $# -gt 0 ] && [ "$1" != -- ]; do args+=("$1"); shift; done
     [ $# -eq 0 ] || shift
@@ -129,17 +175,20 @@ run() {
         -v "$(vol "$HERE/scripts/ceph-deb" /usr/local/bin/ceph-deb ro)" \
         -v "$(vol "$HERE/scripts/lib" /usr/local/lib/ceph-deb ro)" \
         -v "$(vol "$HERE/patches" /usr/local/share/ceph-deb/patches ro)" \
-        "${args[@]}" "$IMAGE:$dist" "$@"
+        "${args[@]}" "$(image_tag "$dist" "$arch")" "$@"
 }
 
 cmd_image() {
     [ $# -gt 0 ] || die "usage: ceph-apt image <dist>..."
     [ -n "$ENGINE" ] || die "neither podman nor docker found"
+    check_arch "$TARGET_ARCH"
     local dist
     for dist in "$@"; do
-        "$ENGINE" build --pull \
+        # --platform also for native builds: pulling a foreign base image
+        # replaces the local debian:<dist> tag, so always ask for the arch.
+        "$ENGINE" build --pull --platform "linux/$TARGET_ARCH" \
             --build-arg "BASE=$(base_image "$dist")" \
-            -t "$IMAGE:$dist" -f "$HERE/Containerfile" "$HERE"
+            -t "$(image_tag "$dist" "$TARGET_ARCH")" -f "$HERE/Containerfile" "$HERE"
     done
 }
 
@@ -151,7 +200,7 @@ cmd_build() {
     for o in "$@"; do
         if [ "$o" = --index ]; then do_index=1; else opts+=("$o"); fi
     done
-    cache="$CACHE_DIR/$dist-$(host_arch)"
+    cache="$CACHE_DIR/$dist-$TARGET_ARCH"
     mkdir -p "$cache"
     run "$dist" -v "$(vol "$cache" /ccache)" -- build "$version" "${opts[@]}"
     [ "$do_index" = 1 ] || return 0
@@ -163,8 +212,9 @@ cmd_build() {
     fi
 }
 
+# The metadata does not depend on the architecture, so index natively.
 cmd_index() {
-    run "$INDEX_DIST" -- index "$@"
+    RUN_ARCH=$(host_arch) run "$INDEX_DIST" -- index "$@"
 }
 
 # Signs on the host with the user's own gpg (agent, pinentry, smartcards);
