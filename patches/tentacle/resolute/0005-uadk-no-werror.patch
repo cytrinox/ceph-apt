@@ -1,0 +1,20 @@
+Description: uadk: build without -Werror
+ The bundled UADK library (built on arm64 only) compiles with -Wall -Werror.
+ With glibc 2.42 in Ubuntu 26.04, strstr() on a const string returns a const
+ pointer, so wd.c fails with "assignment discards 'const' qualifier". Pass
+ -Wno-error to its configure; the warnings stay visible in the build log.
+---
+--- a/cmake/modules/Builduadk.cmake
++++ b/cmake/modules/Builduadk.cmake
+@@ -5,7 +5,10 @@
+     set(UADK_WD_LIBRARY ${UADK_LIBRARY_DIR}/libwd.a)
+     set(UADK_WD_COMP_LIBRARY ${UADK_LIBRARY_DIR}/libwd_comp.a)
+     set(UADK_WD_ZIP_LIBRARY ${UADK_LIBRARY_DIR}/uadk/libhisi_zip.a)
+-    set(configure_cmd env ./configure --prefix=${UADK_INSTALL_DIR})
++    # UADK builds with -Wall -Werror; newer glibc (2.42) turns e.g. strstr()
++    # on a const string into a "discards 'const' qualifier" warning, so don't
++    # fail on warnings in this bundled library.
++    set(configure_cmd env "CFLAGS=$ENV{CFLAGS} -Wno-error" ./configure --prefix=${UADK_INSTALL_DIR})
+     list(APPEND configure_cmd --with-pic --enable-static --disable-shared --with-static_drv)
+ 
+     # command prefix to unset DESTDIR; otherwise debhelper and
