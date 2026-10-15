@@ -19,9 +19,9 @@ point release or go back to one.
 
 | Ceph series | Repository URL | Point releases |
 |---|---|---|
-| Squid 19.2 | `https://ceph.apt.cytrinox.net/repo/squid/19.2` | 19.2.0–19.2.6 |
+| Squid 19.2 | `https://ceph.apt.cytrinox.net/repo/squid/19.2` | 19.2.0–19.2.7 |
 | Tentacle 20.2 | `https://ceph.apt.cytrinox.net/repo/tentacle/20.2` | 20.2.0–20.2.4 |
-| Umbrella 21.1 (pre-release) | `https://ceph.apt.cytrinox.net/repo/umbrella/21.1` | 21.1.0–21.1.1 |
+| Umbrella 21.1 (pre-release) | `https://ceph.apt.cytrinox.net/repo/umbrella/21.1` | 21.1.0–21.1.2 |
 
 Distributions per series:
 
@@ -31,12 +31,11 @@ Distributions per series:
 | Tentacle 20.2 | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Umbrella 21.1 | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 
-All point releases of a series are available for each of its distributions.
-Umbrella 21.1 is a development series of the next Ceph release (21.2), not a
-stable release. Debian 14 (forky) is Debian's current testing release. Only
-`amd64` packages are published; `arm64` is not available yet. Debug (`-dbg`)
-packages are not provided. Source packages are, see
-[Building the packages yourself](#building-the-packages-yourself).
+All point releases of a series are available for each of its distributions,
+for both `amd64` and `arm64`. Umbrella 21.1 is a development series of the
+next Ceph release (21.2), not a stable release. Debian 14 (forky) is Debian's
+current testing release. Debug (`-dbg`) packages are not provided. Source
+packages are, see [Building the packages yourself](#building-the-packages-yourself).
 
 ## Setup
 
