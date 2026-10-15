@@ -1,0 +1,27 @@
+Description: python-common: add ceph.utils.strtobool (backport from 19.2.3)
+ distutils is gone in Python 3.12, so Squid 19.2.3 added its own strtobool to
+ ceph.utils. Needed by the next patch, which moves the mgr modules away from
+ distutils.util.strtobool.
+Ceph-Version: < 19.2.3
+---
+--- a/src/python-common/ceph/utils.py
++++ b/src/python-common/ceph/utils.py
+@@ -167,3 +167,18 @@
+         log.error(e)
+         # handle error here if needed
+         raise
++
++
++_TRUE_VALS = {'y', 'yes', 't', 'true', 'on', '1'}
++_FALSE_VALS = {'n', 'no', 'f', 'false', 'off', '0'}
++
++
++def strtobool(value: str) -> bool:
++    """Convert a string to a boolean value.
++    Based on a simlilar function once available at distutils.util.strtobool.
++    """
++    if value.lower() in _TRUE_VALS:
++        return True
++    if value.lower() in _FALSE_VALS:
++        return False
++    raise ValueError(f'invalid truth value {value!r}')

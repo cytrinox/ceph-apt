@@ -1,0 +1,26 @@
+Description: debian: installable without mime-support and python3-distutils
+ radosgw depends on mime-support and ceph-mgr on python3-distutils (via
+ ceph-mgr.requires). Neither package exists in Debian trixie/forky or Ubuntu
+ 24.04/26.04, so the packages could not be installed there. Same changes as
+ upstream 19.2.4: media-types | mime-support, and no distutils requirement
+ (the code no longer needs it, see the previous patch).
+Ceph-Version: < 19.2.4
+---
+--- a/debian/ceph-mgr.requires
++++ b/debian/ceph-mgr.requires
+@@ -3,4 +3,3 @@
+ cephfs
+ ceph-argparse
+ pyyaml
+-distutils
+--- a/debian/control
++++ b/debian/control
+@@ -992,7 +992,7 @@
+ Architecture: linux-any
+ Depends: ceph-common (= ${binary:Version}),
+          librgw2 (= ${binary:Version}),
+-         mime-support,
++         media-types | mime-support,
+          ${misc:Depends},
+          ${shlibs:Depends},
+ Suggests: gawk,

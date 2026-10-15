@@ -1,0 +1,28 @@
+Description: mgr: use ceph.utils.strtobool instead of distutils
+ distutils was removed in Python 3.12 (Debian trixie/forky, Ubuntu 24.04/26.04),
+ so the volumes and dashboard modules fail to load with "No module named
+ 'distutils'" unless python3-setuptools happens to be installed. Use
+ ceph.utils.strtobool like Tentacle does.
+---
+--- a/src/pybind/mgr/volumes/fs/operations/pin_util.py
++++ b/src/pybind/mgr/volumes/fs/operations/pin_util.py
+@@ -3,7 +3,7 @@
+ import cephfs
+ 
+ from ..exception import VolumeException
+-from distutils.util import strtobool
++from ceph.utils import strtobool
+ 
+ _pin_value = {
+     "export": lambda x: int(x),
+--- a/src/pybind/mgr/dashboard/tools.py
++++ b/src/pybind/mgr/dashboard/tools.py
+@@ -9,7 +9,7 @@
+ import time
+ import urllib
+ from datetime import datetime, timedelta
+-from distutils.util import strtobool
++from ceph.utils import strtobool
+ 
+ import cherrypy
+ from mgr_util import build_url
