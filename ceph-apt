@@ -308,7 +308,9 @@ s3_remote() {
 }
 
 # Moves everything below CEPH_APT_S3_URL into REPO_DIR. Existing files are
-# never overwritten: a file that differs from the pool copy stays in S3 and
+# never overwritten and are compared by checksum, not modification time: an
+# identical file (like the .orig.tar.gz that every revision uploads again) is
+# dropped from S3, a file that differs from the pool copy stays in S3 and
 # rclone reports an error.
 cmd_fetch_incoming() {
     local opts=()
@@ -323,7 +325,7 @@ cmd_fetch_incoming() {
 
     mkdir -p "$REPO_DIR"
     echo "==> Moving new files from $CEPH_APT_S3_URL to $REPO_DIR" >&2
-    rclone move --immutable --delete-empty-src-dirs --stats-one-line -v "${opts[@]}" "$S3_REMOTE" "$REPO_DIR"
+    rclone move --immutable --checksum --delete-empty-src-dirs --stats-one-line -v "${opts[@]}" "$S3_REMOTE" "$REPO_DIR"
     echo "==> Done. Run ./ceph-apt publish to index, sign and upload them." >&2
 }
 
