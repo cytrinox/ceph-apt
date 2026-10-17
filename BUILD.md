@@ -352,8 +352,10 @@ The cloud build only produces packages. To publish them, move them into
 ```
 
 `fetch-incoming` moves the files, so `incoming/` is empty afterwards. It
-never overwrites a file in the pool: a file that exists with different content
-stays in S3 and rclone reports an error. `--dry-run` shows what would be
+never overwrites a file in the pool and compares files by checksum: an
+identical file (like the `.orig.tar.gz` that every `--rev` rebuild uploads
+again) is dropped from S3, a file that exists with different content stays in
+S3 and rclone reports an error. `--dry-run` shows what would be
 moved. It uses the same `CEPH_APT_S3_*` variables as `ceph-apt-cloudbuild`, taken
 from the environment or `ceph-apt.conf`.
 

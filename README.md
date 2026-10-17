@@ -35,7 +35,7 @@ All point releases of a series are available for each of its distributions,
 for both `amd64` and `arm64`. Umbrella 21.1 is a development series of the
 next Ceph release (21.2), not a stable release. Debian 14 (forky) is Debian's
 current testing release. Debug (`-dbg`) packages are not provided. Source
-packages are, see [Building the packages yourself](#building-the-packages-yourself).
+packages are available, see [Building the packages yourself](#building-the-packages-yourself).
 
 ## Setup
 
@@ -101,7 +101,7 @@ EOF
 
 ```sh
 sudo apt update
-apt policy ceph-common           # candidate should be …~deb13u1, …~ubuntu24.04u1, …
+apt policy ceph-common           # candidate should be …~deb13u<N>, …~ubuntu24.04u<N>, …
 sudo apt install ceph-common     # client tools
 sudo apt install ceph            # mon, mgr, osd
 ```
@@ -118,6 +118,10 @@ Package versions look like this:
 │      └──────── upstream packaging revision
 └─────────────── Ceph version
 ```
+
+A rebuild of the same point release (e.g. `…u1` → `…u2`) has a higher
+version, so `apt upgrade` installs it like any other update, also with a
+version pin (see below). The older builds stay in the repository.
 
 List all point releases that are available:
 
@@ -206,7 +210,8 @@ several hours on an 8-core machine.
 
 The packages are built from the unmodified upstream Ceph release tarballs,
 using the `debian/` packaging that ships with them. Changes are limited to
-build fixes, which are kept in [patches/](patches/) and end up in the
+build fixes and to fixes that make the packages install and run on newer
+distributions. They are kept in [patches/](patches/) and end up in the
 `.diff.gz` of the source package, together with the changelog entry. Building
 and publishing are described in [BUILD.md](BUILD.md).
 
