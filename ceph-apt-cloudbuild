@@ -53,6 +53,15 @@ log() { printf '==> %s\n' "$*"; }
 REPO=/srv/ceph-apt/repo
 
 cloud-init status --wait > /dev/null 2>&1 || true
+# Cloud images have no swap; parallel links of the rgw binaries can exceed
+# the RAM and get the linker OOM-killed.
+if ! swapon --show=NAME --noheadings | grep -q .; then
+    log "Adding a 32 GB swap file"
+    fallocate -l 32G /swapfile
+    chmod 600 /swapfile
+    mkswap -q /swapfile
+    swapon /swapfile
+fi
 log "Installing podman, catatonit, git and rclone"
 apt-get update -q
 apt-get install -y -q --no-install-recommends ca-certificates catatonit git podman rclone
