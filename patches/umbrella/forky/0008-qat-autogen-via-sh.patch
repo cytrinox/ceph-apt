@@ -1,0 +1,28 @@
+Description: qat: run the autogen.sh scripts of qatlib and qatzip through sh
+ The bundled qatlib and qatzip ship autogen.sh without a #! line. With
+ cmake 4.3 / libuv 1.53 in Debian forky, ExternalProject executes it
+ directly and fails with "exec format error" instead of falling back to
+ /bin/sh, so the amd64 build stops in the qatlib_ext configure step.
+---
+--- a/cmake/modules/BuildQAT.cmake
++++ b/cmake/modules/BuildQAT.cmake
+@@ -23,7 +23,7 @@
+   include(ExternalProject)
+   ExternalProject_Add(qatlib_ext
+     SOURCE_DIR "${PROJECT_SOURCE_DIR}/src/qatlib"
+-    CONFIGURE_COMMAND ./autogen.sh COMMAND ${configure_cmd}
++    CONFIGURE_COMMAND sh ./autogen.sh COMMAND ${configure_cmd}
+     BUILD_COMMAND ${NO_DESTDIR_COMMAND} make -j3
+     BUILD_IN_SOURCE 1
+     BUILD_BYPRODUCTS ${QAT_LIBRARY} ${QAT_USDM_LIBRARY}
+--- a/cmake/modules/BuildQATzip.cmake
++++ b/cmake/modules/BuildQATzip.cmake
+@@ -33,7 +33,7 @@
+   include(ExternalProject)
+   ExternalProject_Add(qatzip_ext
+     SOURCE_DIR "${PROJECT_SOURCE_DIR}/src/qatzip"
+-    CONFIGURE_COMMAND ./autogen.sh COMMAND ${configure_cmd}
++    CONFIGURE_COMMAND sh ./autogen.sh COMMAND ${configure_cmd}
+     BUILD_COMMAND ${NO_DESTDIR_COMMAND} make -j3
+     BUILD_IN_SOURCE 1
+     BUILD_BYPRODUCTS ${QATzip_LIBRARY}
