@@ -1,8 +1,9 @@
 Description: qat: run the autogen.sh scripts of qatlib and qatzip through sh
- The bundled qatlib and qatzip ship autogen.sh without a #! line. With
- cmake 4.3 / libuv 1.53 in Debian forky, ExternalProject executes it
- directly and fails with "exec format error" instead of falling back to
- /bin/sh, so the amd64 build stops in the qatlib_ext configure step.
+ The bundled qatlib and qatzip ship autogen.sh without a #! line. Since
+ libuv 1.53 in Debian forky, cmake's ExternalProject executes it directly
+ and fails with "exec format error" instead of falling back to /bin/sh
+ (cmake 4.3.4 with libuv 1.52.1 still built), so the amd64 build stops
+ in the qatlib_ext configure step.
 ---
 --- a/cmake/modules/BuildQAT.cmake
 +++ b/cmake/modules/BuildQAT.cmake
