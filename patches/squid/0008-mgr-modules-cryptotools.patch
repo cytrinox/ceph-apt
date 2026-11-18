@@ -1,0 +1,143 @@
+Description: mgr: dashboard, cephadm and restful without in-process PyO3 imports
+ The rest of https://github.com/ceph/ceph/pull/66794 for Squid:
+  - dashboard: verify password hashes through the crypto caller instead of
+    importing bcrypt, select the caller with the crypto_caller option
+    (default: remote, i.e. a child process)
+  - cephadm: use the internal caller, it needs cryptography in-process for
+    asyncssh anyway
+ restful, which Tentacle no longer has, imported pyOpenSSL at the top to
+ create its certificate; create it through mgr_util as well.
+---
+--- a/src/pybind/mgr/cephadm/module.py
++++ b/src/pybind/mgr/cephadm/module.py
+@@ -35,6 +35,7 @@
+     HostPlacementSpec, IngressSpec, \
+     TunedProfileSpec, IscsiServiceSpec
+ from ceph.utils import str_to_datetime, datetime_to_str, datetime_now
++from ceph.cryptotools.select import choose_crypto_caller
+ from cephadm.serve import CephadmServe
+ from cephadm.services.cephadmservice import CephadmDaemonDeploySpec
+ from cephadm.http_server import CephadmHttpServer
+@@ -543,6 +544,10 @@
+ 
+     def __init__(self, *args: Any, **kwargs: Any):
+         super(CephadmOrchestrator, self).__init__(*args, **kwargs)
++        # cephadm module always needs access to the real cryptography module
++        # for asyncssh. It is always permitted to use the internal
++        # cryptocaller.
++        choose_crypto_caller('internal')
+         self._cluster_fsid: str = self.get('mon_map')['fsid']
+         self.last_monmap: Optional[datetime.datetime] = None
+ 
+--- a/src/pybind/mgr/dashboard/module.py
++++ b/src/pybind/mgr/dashboard/module.py
+@@ -21,6 +21,7 @@
+     else:
+         from typing_extensions import Literal
+ 
++from ceph.cryptotools.select import choose_crypto_caller
+ from mgr_module import CLIReadCommand, CLIWriteCommand, HandleCommandResult, \
+     MgrModule, MgrStandbyModule, NotifyType, Option, _get_localized_key
+ from mgr_util import ServerConfigException, build_url, \
+@@ -334,6 +335,7 @@
+         Option(name='standby_error_status_code', type='int', default=500,
+                min=400, max=599),
+         Option(name='redirect_resolve_ip_addr', type='bool', default=False),
++        Option(name='crypto_caller', type='str', default=''),
+         Option(name='cross_origin_url', type='str', default=''),
+     ]
+     MODULE_OPTIONS.extend(options_schema_list())
+@@ -348,6 +350,9 @@
+     def __init__(self, *args, **kwargs):
+         super(Module, self).__init__(*args, **kwargs)
+         CherryPyConfig.__init__(self)
++        # configure the dashboard's crypto caller. by default it will
++        # use the remote caller to avoid pyo3 conflicts
++        choose_crypto_caller(str(self.get_module_option('crypto_caller', '')))
+ 
+         mgr.init(self)
+ 
+@@ -564,6 +569,9 @@
+     def __init__(self, *args, **kwargs):
+         super(StandbyModule, self).__init__(*args, **kwargs)
+         CherryPyConfig.__init__(self)
++        # configure the dashboard's crypto caller. by default it will
++        # use the remote caller to avoid pyo3 conflicts
++        choose_crypto_caller(str(self.get_module_option('crypto_caller', '')))
+         self.shutdown_event = threading.Event()
+ 
+         # We can set the global mgr instance to ourselves even though
+--- a/src/pybind/mgr/dashboard/services/access_control.py
++++ b/src/pybind/mgr/dashboard/services/access_control.py
+@@ -12,7 +12,7 @@
+ from string import ascii_lowercase, ascii_uppercase, digits, punctuation
+ from typing import List, Optional, Sequence
+ 
+-import bcrypt
++from ceph.cryptotools.select import get_crypto_caller
+ from mgr_module import CLICheckNonemptyFileInput, CLIReadCommand, CLIWriteCommand
+ from mgr_util import password_hash
+ 
+@@ -895,7 +895,9 @@
+     hashed_password = inbuf
+     try:
+         # make sure the hashed_password is actually a bcrypt hash
+-        bcrypt.checkpw(b'', hashed_password.encode('utf-8'))
++        # catch a ValueError if hashed_password is not valid.
++        cc = get_crypto_caller()
++        cc.verify_password('', hashed_password)
+         user = mgr.ACCESS_CTRL_DB.get_user(username)
+         user.set_password_hash(hashed_password)
+ 
+--- a/src/pybind/mgr/restful/module.py
++++ b/src/pybind/mgr/restful/module.py
+@@ -19,7 +19,6 @@
+ 
+ from uuid import uuid4
+ from pecan import jsonify, make_app
+-from OpenSSL import crypto
+ from pecan.rest import RestController
+ from werkzeug.serving import make_server, make_ssl_devcert
+ 
+@@ -401,25 +400,11 @@
+ 
+ 
+     def create_self_signed_cert(self):
+-        # create a key pair
+-        pkey = crypto.PKey()
+-        pkey.generate_key(crypto.TYPE_RSA, 2048)
+-
+-        # create a self-signed cert
+-        cert = crypto.X509()
+-        cert.get_subject().O = "IT"
+-        cert.get_subject().CN = "ceph-restful"
+-        cert.set_serial_number(int(uuid4()))
+-        cert.gmtime_adj_notBefore(0)
+-        cert.gmtime_adj_notAfter(10*365*24*60*60)
+-        cert.set_issuer(cert.get_subject())
+-        cert.set_pubkey(pkey)
+-        cert.sign(pkey, 'sha512')
+-
+-        return (
+-            crypto.dump_certificate(crypto.FILETYPE_PEM, cert),
+-            crypto.dump_privatekey(crypto.FILETYPE_PEM, pkey)
+-        )
++        # mgr_util runs the crypto functions in a child process: PyO3
++        # modules like cryptography can't be loaded into more than one
++        # mgr module
++        import mgr_util
++        return mgr_util.create_self_signed_cert(organisation='IT', common_name='ceph-restful')
+ 
+ 
+     def handle_command(self, inbuf, command):
+@@ -460,8 +445,8 @@
+ 
+         elif command['prefix'] == "restful create-self-signed-cert":
+             cert, pkey = self.create_self_signed_cert()
+-            self.set_store(self.get_mgr_id() + '/crt', cert.decode('utf-8'))
+-            self.set_store(self.get_mgr_id() + '/key', pkey.decode('utf-8'))
++            self.set_store(self.get_mgr_id() + '/crt', cert)
++            self.set_store(self.get_mgr_id() + '/key', pkey)
+ 
+             self.restart()
+             return (

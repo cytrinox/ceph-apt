@@ -1,0 +1,23 @@
+Description: ceph-volume: use EntryPoints.select() of importlib.metadata
+ Python 3.12 removed the dict interface of importlib.metadata.entry_points(),
+ so every ceph-volume command fails with "AttributeError: 'EntryPoints' object
+ has no attribute 'get'" on Debian trixie/forky and Ubuntu 24.04/26.04, and
+ no OSD can be created. Use .select() when it exists, as Tentacle does.
+---
+--- a/src/ceph-volume/ceph_volume/main.py
++++ b/src/ceph-volume/ceph_volume/main.py
+@@ -11,7 +11,13 @@
+     from importlib.metadata import entry_points
+ 
+     def get_entry_points(group: str):  # type: ignore
+-        return entry_points().get(group, [])  # type: ignore
++        eps = entry_points()
++        if hasattr(eps, 'select'):
++            # New importlib.metadata uses .select()
++            return eps.select(group=group)
++        else:
++            # Fallback to older EntryPoints that returns dicts
++            return eps.get(group, [])  # type: ignore
+ except ImportError:
+     from pkg_resources import iter_entry_points as entry_points  # type: ignore
+ 

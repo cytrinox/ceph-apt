@@ -1,0 +1,202 @@
+Description: mgr: run the crypto functions of mgr_util through ceph.cryptotools
+ mgr_util.py, which every mgr module imports, imported bcrypt at the top and
+ used pyOpenSSL directly. Use the crypto caller of ceph.cryptotools instead,
+ as Tentacle does (https://github.com/ceph/ceph/pull/66794), but keep Squid's
+ function names and return values, so that the callers stay unchanged.
+Ceph-Version: >= 19.2.5
+---
+--- a/src/pybind/mgr/mgr_util.py
++++ b/src/pybind/mgr/mgr_util.py
+@@ -3,7 +3,6 @@
+ if 'UNITTEST' in os.environ:
+     import tests
+ 
+-import bcrypt
+ import cephfs
+ import contextlib
+ import datetime
+@@ -25,6 +24,7 @@
+ from typing import Tuple, Any, Callable, Optional, Dict, TYPE_CHECKING, TypeVar, List, Iterable, Generator, Generic, Iterator
+ 
+ from ceph.deployment.utils import wrap_ipv6
++from ceph.cryptotools.select import get_crypto_caller
+ 
+ T = TypeVar('T')
+ 
+@@ -531,21 +531,9 @@
+ 
+     """
+ 
+-    from OpenSSL import crypto
+-    from uuid import uuid4
+-
+     # RDN = Relative Distinguished Name
+     valid_RDN_list = ['C', 'ST', 'L', 'O', 'OU', 'CN', 'emailAddress']
+ 
+-    # create a key pair
+-    pkey = crypto.PKey()
+-    pkey.generate_key(crypto.TYPE_RSA, 2048)
+-
+-    # create a self-signed cert and populate its subject with the dname
+-    # settings
+-    cert = crypto.X509()
+-    subj = cert.get_subject()
+-
+     if dname:
+         # dname received, so check it contains valid RDNs
+         if not all(field in valid_RDN_list for field in dname):
+@@ -553,41 +541,19 @@
+     else:
+         dname = {"O": organisation, "CN": common_name}
+ 
+-    # populate the subject with the dname settings
+-    for k, v in dname.items():
+-        setattr(subj, k, v)
+-
+-    cert.set_subject(subj)
+-    cert.set_serial_number(int(uuid4()))
+-    cert.gmtime_adj_notBefore(0)
+-    cert.gmtime_adj_notAfter(10 * 365 * 24 * 60 * 60)  # 10 years
+-    cert.set_issuer(cert.get_subject())
+-    cert.set_pubkey(pkey)
+-    cert.sign(pkey, 'sha512')
+-
+-    cert = crypto.dump_certificate(crypto.FILETYPE_PEM, cert)
+-    pkey = crypto.dump_privatekey(crypto.FILETYPE_PEM, pkey)
+-
+-    return cert.decode('utf-8'), pkey.decode('utf-8')
++    cc = get_crypto_caller()
++    pkey = cc.create_private_key()
++    cert = cc.create_self_signed_cert(dname, pkey)
++    return cert, pkey
+ 
+ 
+ def verify_cacrt_content(crt):
+     # type: (str) -> None
+-    from OpenSSL import crypto
+     try:
+-        crt_buffer = crt.encode("ascii") if isinstance(crt, str) else crt
+-        x509 = crypto.load_certificate(crypto.FILETYPE_PEM, crt_buffer)
+-        if x509.has_expired():
+-            org, cn = get_cert_issuer_info(crt)
+-            no_after = x509.get_notAfter()
+-            end_date = None
+-            if no_after is not None:
+-                end_date = datetime.datetime.strptime(no_after.decode('ascii'), '%Y%m%d%H%M%SZ')
+-            msg = f'Certificate issued by "{org}/{cn}" expired on {end_date}'
+-            logger.warning(msg)
+-            raise ServerConfigException(msg)
+-    except (ValueError, crypto.Error) as e:
+-        raise ServerConfigException(f'Invalid certificate: {e}')
++        cc = get_crypto_caller()
++        cc.certificate_days_to_expire(crt)
++    except ValueError as err:
++        raise ServerConfigException(f'Invalid certificate: {err}')
+ 
+ 
+ def verify_cacrt(cert_fname):
+@@ -606,52 +572,22 @@
+         raise ServerConfigException(
+             'Invalid certificate {}: {}'.format(cert_fname, str(e)))
+ 
+-def get_cert_issuer_info(crt: str) -> Tuple[Optional[str],Optional[str]]:
++def get_cert_issuer_info(crt: str) -> Tuple[Optional[str], Optional[str]]:
+     """Basic validation of a ca cert"""
+-
+-    from OpenSSL import crypto, SSL
++    cc = get_crypto_caller()
+     try:
+-        crt_buffer = crt.encode("ascii") if isinstance(crt, str) else crt
+-        (org_name, cn) = (None, None)
+-        cert = crypto.load_certificate(crypto.FILETYPE_PEM, crt_buffer)
+-        components = cert.get_issuer().get_components()
+-        for c in components:
+-            if c[0].decode() == 'O':  # org comp
+-                org_name = c[1].decode()
+-            elif c[0].decode() == 'CN':  # common name comp
+-                cn = c[1].decode()
+-        return (org_name, cn)
+-    except (ValueError, crypto.Error) as e:
+-        raise ServerConfigException(f'Invalid certificate key: {e}')
++        return cc.get_cert_issuer_info(crt)
++    except ValueError as err:
++        raise ServerConfigException(f'Invalid certificate key: {err}')
+ 
+ def verify_tls(crt, key):
+     # type: (str, str) -> None
+-    verify_cacrt_content(crt)
+-
+-    from OpenSSL import crypto, SSL
+-    try:
+-        _key = crypto.load_privatekey(crypto.FILETYPE_PEM, key)
+-        _key.check()
+-    except (ValueError, crypto.Error) as e:
+-        raise ServerConfigException(
+-            'Invalid private key: {}'.format(str(e)))
+-    try:
+-        crt_buffer = crt.encode("ascii") if isinstance(crt, str) else crt
+-        _crt = crypto.load_certificate(crypto.FILETYPE_PEM, crt_buffer)
+-    except ValueError as e:
+-        raise ServerConfigException(
+-            'Invalid certificate key: {}'.format(str(e))
+-        )
+-
++    cc = get_crypto_caller()
+     try:
+-        context = SSL.Context(SSL.TLSv1_METHOD)
+-        context.use_certificate(_crt)
+-        context.use_privatekey(_key)
+-        context.check_privatekey()
+-    except crypto.Error as e:
+-        logger.warning('Private key and certificate do not match up: {}'.format(str(e)))
+-    except SSL.Error as e:
+-        raise ServerConfigException(f'Invalid cert/key pair: {e}')
++        cc.certificate_days_to_expire(crt)
++        cc.verify_tls(crt, key)
++    except ValueError as err:
++        raise ServerConfigException(str(err))
+ 
+ 
+ 
+@@ -680,24 +616,12 @@
+     if not os.path.isfile(pkey_fname):
+         raise ServerConfigException('private key %s does not exist' % pkey_fname)
+ 
+-    from OpenSSL import crypto, SSL
+-
+-    try:
+-        with open(pkey_fname) as f:
+-            pkey = crypto.load_privatekey(crypto.FILETYPE_PEM, f.read())
+-            pkey.check()
+-    except (ValueError, crypto.Error) as e:
+-        raise ServerConfigException(
+-            'Invalid private key {}: {}'.format(pkey_fname, str(e)))
+-    try:
+-        context = SSL.Context(SSL.TLSv1_METHOD)
+-        context.use_certificate_file(cert_fname, crypto.FILETYPE_PEM)
+-        context.use_privatekey_file(pkey_fname, crypto.FILETYPE_PEM)
+-        context.check_privatekey()
+-    except crypto.Error as e:
+-        logger.warning(
+-            'Private key {} and certificate {} do not match up: {}'.format(
+-                pkey_fname, cert_fname, str(e)))
++    with open(pkey_fname) as key_file, open(cert_fname) as cert_file:
++        try:
++            verify_tls(cert_file.read(), key_file.read())
++        except ServerConfigException as e:
++            raise ServerConfigException(
++                'Invalid private key {} or certificate {}: {}'.format(pkey_fname, cert_fname, e))
+ 
+ 
+ def get_most_recent_rate(rates: Optional[List[Tuple[float, float]]]) -> float:
+@@ -878,8 +802,5 @@
+ def password_hash(password: Optional[str], salt_password: Optional[str] = None) -> Optional[str]:
+     if not password:
+         return None
+-    if not salt_password:
+-        salt = bcrypt.gensalt()
+-    else:
+-        salt = salt_password.encode('utf8')
+-    return bcrypt.hashpw(password.encode('utf8'), salt).decode('utf8')
++    cc = get_crypto_caller()
++    return cc.password_hash(password, salt_password or '')
